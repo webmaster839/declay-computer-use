@@ -1,9 +1,10 @@
 {
-  "name": "declay-vision-loop",
+  "name": "declay-vision-server",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "npm install"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.28.0",
