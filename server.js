@@ -6,68 +6,59 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-const client = new Anthropic({ 
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  defaultHeaders: {
-    'anthropic-beta': 'computer-use-2025-01-24'
-  }
-})
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+// Partslink Zugangsdaten aus Environment
+const PL_FIRMA = process.env.PARTSLINK_FIRMA || ''
+const PL_USER  = process.env.PARTSLINK_USER  || ''
+const PL_PASS  = process.env.PARTSLINK_PASS  || ''
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'DECLAY Computer Use v2' })
+  res.json({ status: 'ok', service: 'DECLAY Partslink v4' })
 })
 
 app.post('/search', async (req, res) => {
-  const { vin, bauteil, credentials } = req.body
-
-  if (!vin || !bauteil) {
-    return res.status(400).json({ error: 'VIN und Bauteil erforderlich' })
-  }
+  const { vin, bauteil } = req.body
+  if (!vin || !bauteil) return res.status(400).json({ error: 'VIN und Bauteil erforderlich' })
 
   console.log(`SUCHE: VIN=${vin} | Bauteil=${bauteil}`)
 
   try {
-    // Computer Use API - Claude navigiert selbst durch Partslink + Birner
+    // Claude mit web_fetch Tool - navigiert Partslink via HTTP
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5-20251001',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4000,
       tools: [
         {
-          type: 'computer_20250124',
-          name: 'computer',
-          display_width_px: 1280,
-          display_height_px: 800,
-          display_number: 1
+          type: 'web_fetch_20260309',
+          name: 'web_fetch'
         }
       ],
-      system: `Du bist ein KFZ-Teile Recherche Assistent.
-Deine Aufgabe ist es, OE-Nummern und Aftermarket-Alternativen für KFZ-Teile zu finden.
+      system: `Du bist ein KFZ-Teile Assistent der Partslink24 via HTTP Requests durchsucht.
+
+Partslink24 Login Daten:
+- Firmenkennung: ${PL_FIRMA}
+- Benutzername: ${PL_USER}  
+- Passwort: ${PL_PASS}
+- Login URL: https://www.partslink24.com/partslink24/login.action
 
 WORKFLOW:
-1. Öffne https://www.partslink24.com im Browser
-2. Logge dich ein mit:
-   - Firmenkennung: ${credentials?.firma || process.env.PARTSLINK_FIRMA || ''}
-   - Benutzername: ${credentials?.partslink_user || process.env.PARTSLINK_USER || ''}
-   - Passwort: ${credentials?.partslink_pass || process.env.PARTSLINK_PASS || ''}
-3. Suche das Fahrzeug mit VIN: ${vin}
-4. Navigiere zur Baugruppe: ${bauteil}
-5. Notiere die OE-Nummer(n)
+1. Führe einen POST Login Request durch mit den Zugangsdaten
+2. Speichere den Session Cookie aus der Antwort
+3. Suche das Fahrzeug mit der VIN über: https://www.partslink24.com/partslink24/catalog/vehicleSearch.do?fin=VIN
+4. Navigiere zur richtigen Baugruppe für das gesuchte Bauteil
+5. Lese die OE-Nummern aus dem HTML aus
 
-6. Öffne https://tm2.carparts-cat.com/login/birner
-7. Logge dich ein mit:
-   - Benutzername: ${credentials?.birner_user || process.env.BIRNER_USER || ''}
-   - Passwort: ${credentials?.birner_pass || process.env.BIRNER_PASS || ''}
-8. Suche nach der gefundenen OE-Nummer
-9. Notiere: Aftermarket Artikel, Preis, Verfügbarkeit, Richtzeit, Drehmomente
-
-WICHTIG: Gib am Ende NUR dieses JSON zurück, KEIN Text davor oder danach:
+Gib am Ende NUR dieses JSON zurück:
 {
   "oe_nummer": "...",
+  "fahrzeug": "...",
   "teile": [
     {
-      "artikelnummer": "...",
+      "oe_nummer": "...",
       "bezeichnung": "...",
       "hersteller": "...",
+      "artikelnummer": "...",
       "preis": "...",
       "verfuegbarkeit": "...",
       "richtzeit": "...",
@@ -78,38 +69,36 @@ WICHTIG: Gib am Ende NUR dieses JSON zurück, KEIN Text davor oder danach:
       messages: [
         {
           role: 'user',
-          content: `Bitte führe den vollständigen Workflow durch:
+          content: `Suche in Partslink24:
 - VIN: ${vin}
 - Bauteil: ${bauteil}
 
-Starte mit Partslink24, dann Birner. Gib das Ergebnis als JSON zurück.`
+Logge dich ein und finde die OE-Nummern. Gib das Ergebnis als JSON zurück.`
         }
       ]
     })
 
-    // Antwort verarbeiten
+    // Alle Antwort-Blöcke verarbeiten
+    console.log('Response stop_reason:', response.stop_reason)
+    
     const textBlocks = response.content.filter(b => b.type === 'text')
     const fullText = textBlocks.map(b => b.text).join('\n')
-
-    console.log('Claude Antwort:', fullText.substring(0, 500))
+    
+    console.log('Text:', fullText.substring(0, 400))
 
     // JSON extrahieren
     const jsonMatch = fullText.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
       try {
         const result = JSON.parse(jsonMatch[0])
+        if (!result.teile) result.teile = []
         return res.json(result)
-      } catch (e) {
-        console.error('JSON Parse Fehler:', e)
+      } catch(e) {
+        console.error('Parse Fehler:', e.message)
       }
     }
 
-    // Fallback: Rohantwort zurückgeben
-    res.json({
-      teile: [],
-      raw: fullText,
-      message: 'Keine strukturierten Daten gefunden'
-    })
+    res.json({ teile: [], oe_nummer: '', raw: fullText })
 
   } catch (error) {
     console.error('Fehler:', error.message)
@@ -118,6 +107,4 @@ Starte mit Partslink24, dann Birner. Gib das Ergebnis als JSON zurück.`
 })
 
 const PORT = process.env.PORT || 3001
-app.listen(PORT, () => {
-  console.log(`DECLAY Computer Use Server v2 läuft auf Port ${PORT}`)
-})
+app.listen(PORT, () => console.log(`DECLAY Partslink Server v4 läuft auf Port ${PORT}`))
