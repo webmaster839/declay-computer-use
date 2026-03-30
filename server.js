@@ -6,7 +6,12 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const client = new Anthropic({ 
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  defaultHeaders: {
+    'anthropic-beta': 'computer-use-2025-01-24'
+  }
+})
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'DECLAY Computer Use v2' })
@@ -28,7 +33,7 @@ app.post('/search', async (req, res) => {
       max_tokens: 4000,
       tools: [
         {
-          type: 'computer_20251122',
+          type: 'computer_20250124',
           name: 'computer',
           display_width_px: 1280,
           display_height_px: 800,
