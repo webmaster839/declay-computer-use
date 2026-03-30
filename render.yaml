@@ -1,7 +1,7 @@
 services:
   - type: web
     name: declay-computer-use
-    env: node
+    runtime: node
     plan: free
     region: frankfurt
     buildCommand: npm install
@@ -14,4 +14,8 @@ services:
       - key: PARTSLINK_USER
         sync: false
       - key: PARTSLINK_PASS
+        sync: false
+      - key: BIRNER_USER
+        sync: false
+      - key: BIRNER_PASS
         sync: false
