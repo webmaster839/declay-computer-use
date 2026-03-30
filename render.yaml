@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: declay-computer-use
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
