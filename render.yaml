@@ -4,7 +4,7 @@ services:
     env: node
     plan: free
     region: frankfurt
-    buildCommand: npm install && npx puppeteer browsers install chrome
+    buildCommand: npm install
     startCommand: node server.js
     envVars:
       - key: ANTHROPIC_API_KEY
@@ -15,5 +15,3 @@ services:
         sync: false
       - key: PARTSLINK_PASS
         sync: false
-      - key: PUPPETEER_CACHE_DIR
-        value: /opt/render/.cache/puppeteer
