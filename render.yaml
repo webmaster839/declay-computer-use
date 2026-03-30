@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: declay-vision-server
+    name: declay-computer-use
     env: node
     plan: free
     region: frankfurt
