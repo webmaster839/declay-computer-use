@@ -1,11 +1,19 @@
 services:
   - type: web
-    name: declay-computer-use
-    runtime: node
-    region: frankfurt
-    plan: free
+    name: declay-vision-server
+    env: node
+    plan: free # Oder 'starter', falls du upgraden willst
+    region: frankfurt # Am besten für Wien
     buildCommand: npm install
     startCommand: node server.js
     envVars:
+      - key: NODE_VERSION
+        value: 20 # Stabilere Version für Puppeteer
       - key: ANTHROPIC_API_KEY
+        sync: false # Den Key trägst du einmal im Dashboard ein
+      - key: PARTSLINK_FIRMA
+        sync: false
+      - key: PARTSLINK_USER
+        sync: false
+      - key: PARTSLINK_PASS
         sync: false
