@@ -8,9 +8,9 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================================
-// DECLAY Partslink Navigator v7
+// DECLAY Partslink Navigator v7.1
 // Claude Computer Use API + Puppeteer
-// Claude navigiert Partslink24 wie ein Mensch!
+// MIT Rate Limit Schutz (8 Sek Pause)
 // ============================================================
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -24,7 +24,7 @@ const jobs = new Map();
 // HEALTH CHECK
 // ============================================================
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'DECLAY Partslink Navigator v7', jobs: jobs.size });
+  res.json({ status: 'ok', service: 'DECLAY Partslink Navigator v7.1', jobs: jobs.size });
 });
 
 // ============================================================
@@ -103,7 +103,7 @@ async function processSearchJob(jobId, vin, bauteil) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
     // Step 2: Navigate to Partslink24
-    updateJob(jobId, 'running', 2, 'Öffne Partslink24...');
+    updateJob(jobId, 'running', 2, 'Oeffne Partslink24...');
     await page.goto('https://www.partslink24.com', { 
       waitUntil: 'networkidle2', 
       timeout: 30000 
@@ -129,7 +129,7 @@ DEIN ZIEL:
 
 WICHTIG:
 - Mache zuerst einen Screenshot um zu sehen wo du bist
-- Klicke präzise auf Buttons und Eingabefelder
+- Klicke praezise auf Buttons und Eingabefelder
 - Nach dem Login suche das FIN/VIN Eingabefeld
 - Navigiere durch den Teilekatalog zum gesuchten Bauteil
 - Wenn du die OE-Nummern gefunden hast, schreibe sie als Text-Antwort
@@ -139,11 +139,11 @@ ERGEBNIS_START
 {"teile": [{"oe_nummer": "...", "bezeichnung": "...", "preis": "...", "hersteller": "..."}]}
 ERGEBNIS_ENDE`;
 
-    const initialMessage = `Navigiere jetzt Partslink24 und finde die OE-Nummern für "${bauteil}" am Fahrzeug mit VIN: ${vin}. Mache zuerst einen Screenshot um zu sehen was auf dem Bildschirm ist.`;
+    const initialMessage = `Navigiere jetzt Partslink24 und finde die OE-Nummern fuer "${bauteil}" am Fahrzeug mit VIN: ${vin}. Mache zuerst einen Screenshot um zu sehen was auf dem Bildschirm ist.`;
 
     // Conversation history for the tool loop
     let messages = [{ role: 'user', content: initialMessage }];
-    let maxIterations = 25; // Safety limit
+    let maxIterations = 25;
     let iteration = 0;
     let result = null;
 
@@ -151,6 +151,14 @@ ERGEBNIS_ENDE`;
       iteration++;
       updateJob(jobId, 'running', 3 + iteration, `Claude Schritt ${iteration}...`);
       console.log(`[JOB ${jobId}] Iteration ${iteration}`);
+
+      // *** RATE LIMIT SCHUTZ ***
+      // 8 Sekunden Pause zwischen API Calls
+      if (iteration > 1) {
+        console.log(`[JOB ${jobId}] Warte 8 Sekunden (Rate Limit Schutz)...`);
+        updateJob(jobId, 'running', 3 + iteration, `Warte kurz... (Schritt ${iteration})`);
+        await new Promise(r => setTimeout(r, 8000));
+      }
 
       // Call Claude API with Computer Use
       const apiResponse = await callClaudeComputerUse(systemPrompt, messages);
@@ -181,10 +189,7 @@ ERGEBNIS_ENDE`;
       const toolUseBlocks = apiResponse.content.filter(b => b.type === 'tool_use');
       
       if (toolUseBlocks.length === 0) {
-        // No more tool calls and no result - Claude is done or stuck
         console.log(`[JOB ${jobId}] Keine weiteren Tool-Aufrufe`);
-        
-        // Try to extract OE numbers from any text
         const allText = textBlocks.map(b => b.text).join('\n');
         result = extractOeFromText(allText);
         break;
@@ -196,12 +201,12 @@ ERGEBNIS_ENDE`;
         const action = toolUse.input;
         console.log(`[JOB ${jobId}] Aktion: ${action.action}`, action.coordinate || action.text || '');
         
-        updateJob(jobId, 'running', 3 + iteration, `${describeAction(action)}`);
+        updateJob(jobId, 'running', 3 + iteration, describeAction(action));
 
         // Execute the action on the browser
         await executeAction(page, action);
 
-        // Take screenshot after action (always send back what the screen looks like)
+        // Take screenshot after action
         const screenshot = await page.screenshot({ 
           encoding: 'base64', 
           type: 'png',
@@ -247,7 +252,6 @@ ERGEBNIS_ENDE`;
     if (browser) {
       try { await browser.close(); } catch (e) { /* ignore */ }
     }
-    // Clean up job after 10 minutes
     setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000);
   }
 }
@@ -296,7 +300,6 @@ async function executeAction(page, action) {
 
   switch (action.action) {
     case 'screenshot':
-      // Just take screenshot - handled after this function
       break;
 
     case 'left_click':
@@ -336,10 +339,8 @@ async function executeAction(page, action) {
 
     case 'key':
       if (action.text) {
-        // Handle key combinations like "ctrl+a" or single keys like "Return"
         const keys = action.text.split('+');
         if (keys.length > 1) {
-          // Key combination
           for (let i = 0; i < keys.length - 1; i++) {
             await page.keyboard.down(mapKey(keys[i].trim()));
           }
@@ -390,7 +391,6 @@ async function executeAction(page, action) {
       break;
 
     case 'cursor_position':
-      // Just return current position - screenshot will show cursor
       break;
 
     default:
@@ -403,56 +403,40 @@ async function executeAction(page, action) {
 // ============================================================
 function mapKey(key) {
   const keyMap = {
-    'Return': 'Enter',
-    'return': 'Enter',
-    'enter': 'Enter',
-    'space': ' ',
-    'Space': ' ',
-    'ctrl': 'Control',
-    'Ctrl': 'Control',
-    'alt': 'Alt',
-    'shift': 'Shift',
-    'tab': 'Tab',
-    'Tab': 'Tab',
-    'escape': 'Escape',
-    'Escape': 'Escape',
-    'backspace': 'Backspace',
-    'Backspace': 'Backspace',
-    'delete': 'Delete',
-    'Delete': 'Delete',
-    'ArrowUp': 'ArrowUp',
-    'ArrowDown': 'ArrowDown',
-    'ArrowLeft': 'ArrowLeft',
-    'ArrowRight': 'ArrowRight',
-    'Page_Down': 'PageDown',
-    'Page_Up': 'PageUp',
-    'Home': 'Home',
-    'End': 'End',
-    'F5': 'F5'
+    'Return': 'Enter', 'return': 'Enter', 'enter': 'Enter',
+    'space': ' ', 'Space': ' ',
+    'ctrl': 'Control', 'Ctrl': 'Control',
+    'alt': 'Alt', 'shift': 'Shift',
+    'tab': 'Tab', 'Tab': 'Tab',
+    'escape': 'Escape', 'Escape': 'Escape',
+    'backspace': 'Backspace', 'Backspace': 'Backspace',
+    'delete': 'Delete', 'Delete': 'Delete',
+    'ArrowUp': 'ArrowUp', 'ArrowDown': 'ArrowDown',
+    'ArrowLeft': 'ArrowLeft', 'ArrowRight': 'ArrowRight',
+    'Page_Down': 'PageDown', 'Page_Up': 'PageUp',
+    'Home': 'Home', 'End': 'End', 'F5': 'F5'
   };
   return keyMap[key] || key;
 }
 
 function describeAction(action) {
   switch (action.action) {
-    case 'screenshot': return '📸 Screenshot...';
-    case 'left_click': return `🖱️ Klick auf (${action.coordinate?.join(', ')})`;
-    case 'type': return `⌨️ Tippe: "${action.text?.substring(0, 30)}..."`;
-    case 'key': return `⌨️ Taste: ${action.text}`;
-    case 'scroll': return `📜 Scrollen ${action.direction || 'down'}`;
-    case 'wait': return '⏳ Warte...';
-    default: return `🔧 ${action.action}`;
+    case 'screenshot': return 'Screenshot...';
+    case 'left_click': return `Klick auf (${action.coordinate?.join(', ')})`;
+    case 'type': return `Tippe: "${(action.text || '').substring(0, 20)}..."`;
+    case 'key': return `Taste: ${action.text}`;
+    case 'scroll': return `Scrollen ${action.direction || 'down'}`;
+    case 'wait': return 'Warte...';
+    default: return action.action;
   }
 }
 
 function extractOeFromText(text) {
-  // Try to find OE numbers in free text
-  // Common patterns: "1K0 407 183 E", "4246.W0", "34.11.6.855.781"
   const patterns = [
-    /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]?\b/g,  // VW style: 1K0 407 183 E
-    /\b\d{4}\.[A-Z]\d\b/g,                                     // PSA style: 4246.W0
-    /\b\d{2}\.\d{2}\.\d\.\d{3}\.\d{3}\b/g,                     // BMW style: 34.11.6.855.781
-    /\b[A-Z]{2}\d{5,8}[A-Z]?\b/g,                              // Generic: AB12345678
+    /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]?\b/g,
+    /\b\d{4}\.[A-Z]\d\b/g,
+    /\b\d{2}\.\d{2}\.\d\.\d{3}\.\d{3}\b/g,
+    /\b[A-Z]{2}\d{5,8}[A-Z]?\b/g,
   ];
 
   const found = new Set();
@@ -492,7 +476,8 @@ function updateJob(jobId, status, step, message) {
 // ============================================================
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`DECLAY Partslink Navigator v7 läuft auf Port ${PORT}`);
+  console.log(`DECLAY Partslink Navigator v7.1 laeuft auf Port ${PORT}`);
   console.log(`Computer Use: computer_20251124 + claude-sonnet-4-6`);
+  console.log(`Rate Limit Schutz: 8 Sekunden Pause zwischen Schritten`);
   console.log(`Display: ${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}`);
 });
