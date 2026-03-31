@@ -197,7 +197,12 @@ Achte auf die Bemerkung "${achse}" oder "vorn"/"hinten".
 
 Lies alle passenden OE-Nummern ab (nur schwarze Schrift!) und gib sie zurueck.
 
-WENN DU FERTIG BIST, antworte mit:
+SCHRITT 9 - ABMELDEN:
+Wenn du die OE-Nummern gesammelt hast, melde dich ab!
+Klicke oben rechts auf "..." oder das Menue und dann auf "Abmelden" oder "Logout".
+Das ist wichtig damit die Session frei wird fuer die naechste Suche.
+
+WENN DU FERTIG BIST (nach dem Abmelden), antworte mit:
 ERGEBNIS_START
 {"teile": [{"oe_nummer": "...", "bezeichnung": "...", "preis": "...", "hersteller": "..."}]}
 ERGEBNIS_ENDE
