@@ -88,7 +88,26 @@ app.get('/view/:jobId', (req, res) => {
 // Live View Seite mit Auto-Refresh
 app.get('/live/:jobId', (req, res) => {
   const jobId = req.params.jobId;
-  res.send(`<!DOCTYPE html>
+  res.send(getLiveHtml(jobId));
+});
+
+// Live View OHNE JobId - zeigt automatisch den letzten/aktuellen Job
+app.get('/live', (req, res) => {
+  // Finde den aktuellsten Job
+  let latestJob = null;
+  let latestId = null;
+  for (const [id, job] of jobs) {
+    if (!latestJob || new Date(job.startedAt) > new Date(latestJob.startedAt)) {
+      latestJob = job;
+      latestId = id;
+    }
+  }
+  if (!latestId) return res.send('<html><body style="background:#080a08;color:#39ff14;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Kein aktiver Job. Starte eine Suche in DECLAY!</p></body></html>');
+  res.send(getLiveHtml(latestId));
+});
+
+function getLiveHtml(jobId) {
+  return `<!DOCTYPE html>
 <html><head><title>DECLAY Live View</title>
 <style>
   body { background: #080a08; color: #39ff14; font-family: monospace; margin: 0; padding: 16px; }
@@ -114,7 +133,6 @@ app.get('/live/:jobId', (req, res) => {
       statusEl.textContent = 'Schritt ' + job.step + ': ' + job.message;
       statusEl.className = job.status === 'done' ? 'done' : job.status === 'error' ? 'error' : '';
       
-      // Screenshot aktualisieren
       imgEl.src = '/view/' + jobId + '?t=' + Date.now();
       imgEl.style.display = 'block';
       
@@ -123,11 +141,11 @@ app.get('/live/:jobId', (req, res) => {
         if (job.teile && job.teile.length > 0) {
           statusEl.textContent += ' | ' + job.teile.length + ' Teile gefunden!';
         }
-        return; // Stop
+        return;
       }
       if (job.status === 'error') {
         statusEl.textContent += ' ❌';
-        return; // Stop
+        return;
       }
       
       setTimeout(refresh, 3000);
@@ -138,8 +156,8 @@ app.get('/live/:jobId', (req, res) => {
   }
   refresh();
 </script>
-</body></html>`);
-});
+</body></html>`;
+}
 
 // ============================================================
 // MAIN PROCESSING
