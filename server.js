@@ -8,12 +8,11 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================================
-// DECLAY Partslink Navigator v7.3
-// Optimierter Flow basierend auf echtem Partslink Walkthrough
-// + Passwort maskiert
-// + 50 Iterationen
-// + Retry bei 429
-// + Intelligente Bauteil-Suche
+// DECLAY Partslink Navigator v7.4
+// + Einfacher Prompt (Claude denkt selbst)
+// + Teile-LISTE statt einzelnes Bauteil
+// + 1x Login → alle Teile suchen → Logout
+// + 15 Messages Kontext (statt 9)
 // ============================================================
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -23,87 +22,52 @@ const DISPLAY_HEIGHT = 800;
 const jobs = new Map();
 let activeJob = false;
 
-// VIN Prefix → Markenname fuer Logo-Erkennung
 const VIN_MARKEN = {
-  'WBA': 'BMW', 'WBS': 'BMW', 'WBY': 'BMW',
-  'WVW': 'Volkswagen', 'WVG': 'Volkswagen',
-  'WMW': 'MINI',
-  'WF0': 'Ford',
-  'WAU': 'Audi', 'WUA': 'Audi',
-  'WDB': 'Mercedes', 'WDC': 'Mercedes', 'WDD': 'Mercedes',
-  'W0L': 'Opel',
-  'TMB': 'Skoda',
-  'VF1': 'Renault',
-  'VF7': 'Citroen',
-  'VF3': 'Peugeot',
-  'ZFA': 'Fiat',
-  'SUZ': 'Suzuki',
-  'SAL': 'Land Rover', 'SAJ': 'Jaguar',
-  'YV1': 'Volvo',
-  'KNA': 'Kia', 'KNE': 'Kia',
-  'KMH': 'Hyundai',
-  'JTD': 'Toyota', 'SB1': 'Toyota',
-  'VSS': 'SEAT',
-  'TRU': 'Audi',
-  'UU1': 'Dacia',
-  'VNK': 'Toyota',
-  'WP0': 'Porsche', 'WP1': 'Porsche',
+  'WBA':'BMW','WBS':'BMW','WBY':'BMW','WVW':'Volkswagen','WVG':'Volkswagen',
+  'WMW':'MINI','WF0':'Ford','WAU':'Audi','WUA':'Audi',
+  'WDB':'Mercedes','WDC':'Mercedes','WDD':'Mercedes','W0L':'Opel',
+  'TMB':'Skoda','VF1':'Renault','VF7':'Citroen','VF3':'Peugeot',
+  'ZFA':'Fiat','SAL':'Land Rover','SAJ':'Jaguar','YV1':'Volvo',
+  'KNA':'Kia','KNE':'Kia','KMH':'Hyundai','JTD':'Toyota','SB1':'Toyota',
+  'VSS':'SEAT','TRU':'Audi','UU1':'Dacia','VNK':'Toyota',
+  'WP0':'Porsche','WP1':'Porsche','SUZ':'Suzuki',
 };
-
-// Bauteil-Suchbegriff optimieren (VA/HA entfernen)
-function cleanBauteil(bauteil) {
-  return bauteil
-    .replace(/\bVA\b/gi, '')
-    .replace(/\bHA\b/gi, '')
-    .replace(/\bvorne?\b/gi, '')
-    .replace(/\bhinten?\b/gi, '')
-    .replace(/\bVorderachse\b/gi, '')
-    .replace(/\bHinterachse\b/gi, '')
-    .replace(/\bBelaege\b/gi, 'Bremsbelag')
-    .replace(/\bBeläge\b/gi, 'Bremsbelag')
-    .trim();
-}
-
-// Achse aus Original-Bauteil erkennen
-function getAchse(bauteil) {
-  const lower = bauteil.toLowerCase();
-  if (lower.includes('va') || lower.includes('vorn') || lower.includes('vorderachse')) return 'vorne';
-  if (lower.includes('ha') || lower.includes('hinten') || lower.includes('hinterachse')) return 'hinten';
-  return 'vorne'; // Default
-}
 
 function getMarkeFromVin(vin) {
   if (!vin || vin.length < 3) return null;
-  const prefix3 = vin.substring(0, 3).toUpperCase();
-  if (VIN_MARKEN[prefix3]) return VIN_MARKEN[prefix3];
-  const prefix2 = vin.substring(0, 2).toUpperCase();
-  for (const [key, val] of Object.entries(VIN_MARKEN)) {
-    if (key.startsWith(prefix2)) return val;
+  const p3 = vin.substring(0,3).toUpperCase();
+  if (VIN_MARKEN[p3]) return VIN_MARKEN[p3];
+  for (const [k,v] of Object.entries(VIN_MARKEN)) {
+    if (k.substring(0,2) === p3.substring(0,2)) return v;
   }
   return null;
 }
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'DECLAY v7.3', jobs: jobs.size, busy: activeJob });
+  res.json({ status: 'ok', service: 'DECLAY v7.4', jobs: jobs.size, busy: activeJob });
 });
 
 app.post('/search', (req, res) => {
-  const { vin, bauteil } = req.body;
-  if (!vin || !bauteil) return res.status(400).json({ error: 'VIN und Bauteil erforderlich' });
+  const { vin, bauteil, teile } = req.body;
+  if (!vin) return res.status(400).json({ error: 'VIN erforderlich' });
+  if (!bauteil && (!teile || teile.length === 0)) return res.status(400).json({ error: 'Bauteil oder Teile-Liste erforderlich' });
   if (activeJob) return res.status(429).json({ error: 'Ein Job laeuft bereits. Bitte warten.' });
 
+  // Teile-Liste: entweder aus "teile" Array oder einzelnes "bauteil"
+  const teileListe = teile || [bauteil];
+
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-  jobs.set(jobId, { status: 'starting', step: 0, message: 'Starte...', teile: [], error: null, startedAt: new Date().toISOString() });
-  console.log(`[JOB ${jobId}] Gestartet: VIN=${vin} Bauteil=${bauteil}`);
+  jobs.set(jobId, { status: 'starting', step: 0, message: 'Starte...', teile: [], error: null, teileListe, startedAt: new Date().toISOString() });
+  console.log(`[JOB ${jobId}] Gestartet: VIN=${vin} | Teile: ${teileListe.join(', ')}`);
   activeJob = true;
 
-  processSearchJob(jobId, vin, bauteil).catch(err => {
+  processSearchJob(jobId, vin, teileListe).catch(err => {
     console.error(`[JOB ${jobId}] Fataler Fehler:`, err.message);
     const job = jobs.get(jobId);
     if (job) { job.status = 'error'; job.error = err.message; }
   }).finally(() => { activeJob = false; });
 
-  res.json({ jobId });
+  res.json({ jobId, teileListe });
 });
 
 app.get('/status/:jobId', (req, res) => {
@@ -115,15 +79,12 @@ app.get('/status/:jobId', (req, res) => {
 // ============================================================
 // MAIN PROCESSING
 // ============================================================
-async function processSearchJob(jobId, vin, bauteil) {
+async function processSearchJob(jobId, vin, teileListe) {
   const job = jobs.get(jobId);
   let browser = null;
-
-  const suchbegriff = cleanBauteil(bauteil);
-  const achse = getAchse(bauteil);
   const marke = getMarkeFromVin(vin);
-  
-  console.log(`[JOB ${jobId}] Suchbegriff: "${suchbegriff}" | Achse: ${achse} | Marke: ${marke || 'unbekannt'}`);
+
+  console.log(`[JOB ${jobId}] Marke: ${marke || 'unbekannt'} | ${teileListe.length} Teile zu suchen`);
 
   try {
     updateJob(jobId, 'running', 1, 'Browser wird gestartet...');
@@ -141,82 +102,51 @@ async function processSearchJob(jobId, vin, bauteil) {
     await page.goto('https://www.partslink24.com', { waitUntil: 'networkidle2', timeout: 30000 });
     console.log(`[JOB ${jobId}] Partslink24 geladen`);
 
-    updateJob(jobId, 'running', 3, 'Claude navigiert...');
-    
     const firma = process.env.PARTSLINK_FIRMA || '';
     const user = process.env.PARTSLINK_USER || '';
     const pass = process.env.PARTSLINK_PASS || '';
 
-    const systemPrompt = `Du bist ein KFZ-Teile Experte der Partslink24 navigiert.
-Du siehst Screenshots und steuerst den Browser mit Klicks und Tastatureingaben.
+    // Teile-Liste als Text formatieren
+    const teileText = teileListe.map((t, i) => `${i+1}. ${t}`).join('\n');
 
-EXAKTER ABLAUF - FOLGE DIESEN SCHRITTEN:
+    // EINFACHER PROMPT - Claude denkt selbst!
+    const systemPrompt = `Du bist ein erfahrener KFZ-Mechaniker der Partslink24 bedient.
+Du siehst den Bildschirm und navigierst wie ein Mensch.
 
-SCHRITT 1 - LOGIN (rechts oben auf der Seite):
-Die Login-Felder sind rechts oben. Dort stehen 3 Eingabefelder untereinander:
-- "Firmenkennung / ID:" → Klick ins Feld, tippe: ${firma}
-- "Benutzername:" → Klick ins Feld, tippe: ${user}
-- "Passwort:" → Klick ins Feld, tippe: ${pass}
-- Dann klick den "Login" Button darunter.
-WICHTIG: Die Felder sind RECHTS auf der Seite, nicht links! Klicke DIREKT ins jeweilige Feld!
+DEINE AUFGABE:
+1. Logge dich ein auf Partslink24 (Login-Felder sind rechts auf der Seite):
+   Firmenkennung: ${firma} | Benutzer: ${user} | Passwort: ${pass}
+2. Falls ein Pop-up kommt, klicke OK.
+3. Klicke auf das Logo der Marke "${marke || 'erkenne die Marke aus der VIN'}".
+4. Gib die VIN im Feld "Direkteinstieg" oben links ein: ${vin}
+5. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben:
+${teileText}
+6. Fuer jedes Teil: Lies die OE-Nummern aus der Ergebnisliste.
+   NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug!
+   GRAUE Schrift = passt NICHT, ignorieren!
+7. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
 
-SCHRITT 2 - POP-UP:
-Nach dem Login kommt oft ein Pop-up mit einem "OK" Button. Klicke auf "OK" um es zu schliessen.
+WICHTIG:
+- Wenn du Teilenummern auf dem Bildschirm siehst, LIES SIE SOFORT AB!
+  Nicht weiter scrollen oder klicken wenn du Nummern sehen kannst!
+- Suche Teile OHNE "VA" oder "HA" - nur z.B. "Bremsscheibe" nicht "Bremsscheibe VA"
+- Gib Teilergebnisse zurueck sobald du sie hast
 
-SCHRITT 3 - MARKE WAEHLEN:
-Du siehst Marken-Logos (BMW, VW, Skoda, etc.). 
-Die Marke fuer VIN ${vin} ist: ${marke || 'aus der VIN ableiten'}.
-Klicke auf das richtige Marken-Logo!
-
-SCHRITT 4 - VIN EINGEBEN:
-Nach dem Klick auf die Marke siehst du oben links ein Feld "Direkteinstieg" mit einer Lupe.
-Klicke in dieses Feld und tippe die VIN: ${vin}
-Dann klicke auf die Lupe daneben oder druecke Enter.
-
-SCHRITT 5 - FAHRZEUG BESTAETIGEN:
-Es oeffnet sich ein Fenster "Fahrzeugidentifikation" mit den Fahrzeugdaten.
-Wenn ein ">" Pfeil oder "weiter" Button sichtbar ist, klicke darauf.
-Eventuell kommt noch eine Fahrzeugauswahl - waehle das passende Modell.
-
-SCHRITT 6 - TEIL SUCHEN:
-Oben in der Mitte/rechts gibt es ein Suchfeld "Teile suchen".
-Klicke hinein und tippe: ${suchbegriff}
-Dann klicke auf die Lupe oder druecke Enter.
-WICHTIG: Suche NUR nach "${suchbegriff}" - NICHT nach "VA" oder "HA"!
-
-SCHRITT 7 - ERGEBNISSE LESEN:
-Links erscheint eine Liste mit Teilenummern und Benennung.
-Klicke auf einen Eintrag der "${suchbegriff}" in der Benennung hat.
-Rechts erscheint dann eine Detailansicht mit Explosionszeichnung und Teileliste.
-
-SCHRITT 8 - OE-NUMMERN PRUEFEN:
-In der rechten Teileliste stehen die OE-Nummern.
-WICHTIG: Nur Teile mit SCHWARZER Schrift passen zu diesem Fahrzeug!
-Teile mit GRAUER Schrift passen NICHT - diese ignorieren!
-Achte auf die Bemerkung "${achse}" oder "vorn"/"hinten".
-
-Lies alle passenden OE-Nummern ab (nur schwarze Schrift!) und gib sie zurueck.
-
-SCHRITT 9 - ABMELDEN:
-Wenn du die OE-Nummern gesammelt hast, melde dich ab!
-Klicke oben rechts auf "..." oder das Menue und dann auf "Abmelden" oder "Logout".
-Das ist wichtig damit die Session frei wird fuer die naechste Suche.
-
-WENN DU FERTIG BIST (nach dem Abmelden), antworte mit:
+ERGEBNIS FORMAT (wenn du OE-Nummern gefunden hast):
 ERGEBNIS_START
-{"teile": [{"oe_nummer": "...", "bezeichnung": "...", "preis": "...", "hersteller": "..."}]}
+{"teile": [
+  {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne", "preis": "", "hersteller": "OE"},
+  {"oe_nummer": "5K0 698 151", "bezeichnung": "Bremsbelag vorne", "preis": "", "hersteller": "OE"}
+]}
 ERGEBNIS_ENDE
 
-REGELN:
-- Mache zuerst einen Screenshot um zu sehen wo du bist
-- Sei schnell und direkt - nicht herumscrollen wenn nicht noetig
-- Wenn ein Pop-up kommt, klicke OK oder schliesse es
-- Wenn du nicht weiterkommst, mache einen Screenshot und analysiere neu
-- Gib nach spaetestens 40 Schritten das bisherige Ergebnis aus, auch wenn unvollstaendig`;
+Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
 
-    let messages = [{ 
-      role: 'user', 
-      content: `Du bist auf partslink24.com. Mache einen Screenshot und beginne mit dem Login (rechts oben auf der Seite). Danach suche "${suchbegriff}" fuer VIN: ${vin} (${marke || 'Marke aus VIN ableiten'}).` 
+    updateJob(jobId, 'running', 3, 'Claude navigiert Partslink24...');
+
+    let messages = [{
+      role: 'user',
+      content: `Du bist auf partslink24.com. Logge dich ein und suche diese Teile fuer VIN ${vin} (${marke || 'Marke aus VIN erkennen'}):\n${teileText}\n\nMache zuerst einen Screenshot.`
     }];
     
     let maxIterations = 50;
@@ -235,10 +165,10 @@ REGELN:
         await new Promise(r => setTimeout(r, 10000));
       }
 
-      // Konversation kuerzen
-      if (messages.length > 9) {
-        messages = [messages[0], ...messages.slice(-8)];
-        console.log(`[JOB ${jobId}] Konversation gekuerzt`);
+      // Konversation kuerzen: 15 statt 9 Messages behalten
+      if (messages.length > 15) {
+        messages = [messages[0], ...messages.slice(-14)];
+        console.log(`[JOB ${jobId}] Konversation gekuerzt auf ${messages.length}`);
       }
 
       // Claude API Call mit Retry
@@ -259,13 +189,18 @@ REGELN:
       if (!apiResponse || !apiResponse.content) throw new Error('Keine Antwort von Claude API');
       console.log(`[JOB ${jobId}] Stop reason: ${apiResponse.stop_reason}`);
 
-      // Check for results
+      // Check for results in text
       const textBlocks = apiResponse.content.filter(b => b.type === 'text');
       for (const tb of textBlocks) {
+        console.log(`[JOB ${jobId}] Text: ${tb.text.substring(0, 100)}...`);
         const match = tb.text.match(/ERGEBNIS_START\s*([\s\S]*?)\s*ERGEBNIS_ENDE/);
         if (match) {
-          try { result = JSON.parse(match[1]); console.log(`[JOB ${jobId}] Ergebnis gefunden!`); } 
-          catch (e) { console.log(`[JOB ${jobId}] JSON Parse Fehler`); }
+          try { 
+            result = JSON.parse(match[1]); 
+            console.log(`[JOB ${jobId}] ERGEBNIS: ${result.teile.length} Teile gefunden!`);
+          } catch (e) { 
+            console.log(`[JOB ${jobId}] JSON Parse Fehler: ${e.message}`); 
+          }
         }
       }
       if (result) break;
@@ -273,6 +208,7 @@ REGELN:
       // End if no more tool calls
       const toolUseBlocks = apiResponse.content.filter(b => b.type === 'tool_use');
       if (toolUseBlocks.length === 0) {
+        console.log(`[JOB ${jobId}] Keine Tool-Aufrufe mehr`);
         const allText = textBlocks.map(b => b.text).join('\n');
         result = extractOeFromText(allText);
         break;
@@ -283,7 +219,7 @@ REGELN:
       for (const toolUse of toolUseBlocks) {
         const action = toolUse.input;
         
-        // Passwort maskieren in Logs
+        // Passwort maskieren
         const logText = (action.text === pass) ? '****' : (action.text || '');
         console.log(`[JOB ${jobId}] Aktion: ${action.action}`, action.coordinate || logText);
         updateJob(jobId, 'running', 3 + iteration, describeAction(action, pass));
@@ -459,6 +395,6 @@ function updateJob(jobId, status, step, message) {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`DECLAY Partslink Navigator v7.3 auf Port ${PORT}`);
-  console.log(`Optimierter Flow | PW maskiert | 50 Iterationen | Retry 429`);
+  console.log(`DECLAY Partslink Navigator v7.4 auf Port ${PORT}`);
+  console.log(`Einfacher Prompt | Teile-Liste | 15 Messages Kontext | Retry 429`);
 });
