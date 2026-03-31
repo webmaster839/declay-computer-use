@@ -76,6 +76,71 @@ app.get('/status/:jobId', (req, res) => {
   res.json(job);
 });
 
+// Live Screenshot als Bild
+app.get('/view/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job || !job.lastScreenshot) return res.status(404).send('Kein Screenshot verfuegbar');
+  const img = Buffer.from(job.lastScreenshot, 'base64');
+  res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': img.length, 'Cache-Control': 'no-cache' });
+  res.end(img);
+});
+
+// Live View Seite mit Auto-Refresh
+app.get('/live/:jobId', (req, res) => {
+  const jobId = req.params.jobId;
+  res.send(`<!DOCTYPE html>
+<html><head><title>DECLAY Live View</title>
+<style>
+  body { background: #080a08; color: #39ff14; font-family: monospace; margin: 0; padding: 16px; }
+  h1 { font-size: 18px; letter-spacing: 2px; }
+  #status { padding: 8px 16px; background: #0f1f0f; border: 1px solid #39ff14; border-radius: 8px; margin: 8px 0; font-size: 14px; }
+  #screenshot { max-width: 100%; border: 1px solid #39ff14; border-radius: 4px; margin-top: 8px; }
+  .done { color: #22c55e; }
+  .error { color: #ef4444; }
+</style>
+</head><body>
+<h1>DECLAY LIVE VIEW</h1>
+<div id="status">Verbinde...</div>
+<img id="screenshot" src="/view/${jobId}" onerror="this.style.display='none'" />
+<script>
+  const jobId = '${jobId}';
+  const statusEl = document.getElementById('status');
+  const imgEl = document.getElementById('screenshot');
+  
+  async function refresh() {
+    try {
+      const res = await fetch('/status/' + jobId);
+      const job = await res.json();
+      statusEl.textContent = 'Schritt ' + job.step + ': ' + job.message;
+      statusEl.className = job.status === 'done' ? 'done' : job.status === 'error' ? 'error' : '';
+      
+      // Screenshot aktualisieren
+      imgEl.src = '/view/' + jobId + '?t=' + Date.now();
+      imgEl.style.display = 'block';
+      
+      if (job.status === 'done') {
+        statusEl.textContent += ' ✅';
+        if (job.teile && job.teile.length > 0) {
+          statusEl.textContent += ' | ' + job.teile.length + ' Teile gefunden!';
+        }
+        return; // Stop
+      }
+      if (job.status === 'error') {
+        statusEl.textContent += ' ❌';
+        return; // Stop
+      }
+      
+      setTimeout(refresh, 3000);
+    } catch(e) {
+      statusEl.textContent = 'Warte auf Server...';
+      setTimeout(refresh, 5000);
+    }
+  }
+  refresh();
+</script>
+</body></html>`);
+});
+
 // ============================================================
 // MAIN PROCESSING
 // ============================================================
@@ -227,6 +292,11 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
         await executeAction(page, action);
 
         const screenshot = await page.screenshot({ encoding: 'base64', type: 'png', fullPage: false });
+        
+        // Screenshot im Job speichern fuer Live-View
+        const currentJob = jobs.get(jobId);
+        if (currentJob) currentJob.lastScreenshot = screenshot;
+        
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
