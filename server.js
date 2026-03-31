@@ -189,25 +189,105 @@ async function processSearchJob(jobId, vin, teileListe) {
     const user = process.env.PARTSLINK_USER || '';
     const pass = process.env.PARTSLINK_PASS || '';
 
+    // ============================================================
+    // PUPPETEER DIREKT-LOGIN (spart 12 API Calls!)
+    // ============================================================
+    updateJob(jobId, 'running', 3, 'Login...');
+    console.log(`[JOB ${jobId}] Puppeteer Login startet...`);
+
+    try {
+      // Cookie-Banner akzeptieren falls vorhanden
+      await page.waitForTimeout(2000);
+      try {
+        const cookieBtn = await page.$('button[id*="cookie"], button[class*="cookie"], .cc-btn, #onetrust-accept-btn-handler');
+        if (cookieBtn) { await cookieBtn.click(); await page.waitForTimeout(1000); }
+      } catch(e) {}
+      // Auch per Klick auf bekannte Position (unten rechts)
+      try { await page.mouse.click(1119, 747); await page.waitForTimeout(1000); } catch(e) {}
+
+      // Login-Felder ausfuellen (rechts auf der Seite)
+      // Finde alle Input-Felder
+      const inputs = await page.$$('input[type="text"], input[type="password"], input:not([type])');
+      console.log(`[JOB ${jobId}] ${inputs.length} Input-Felder gefunden`);
+      
+      if (inputs.length >= 3) {
+        // Methode 1: Direkt ueber gefundene Inputs
+        await inputs[0].click();
+        await inputs[0].type(firma, { delay: 30 });
+        await page.waitForTimeout(300);
+        
+        await inputs[1].click();
+        await inputs[1].type(user, { delay: 30 });
+        await page.waitForTimeout(300);
+        
+        // Passwort-Feld (letztes oder type=password)
+        const passInput = await page.$('input[type="password"]') || inputs[2];
+        await passInput.click();
+        await passInput.type(pass, { delay: 30 });
+        await page.waitForTimeout(300);
+      } else {
+        // Methode 2: Klick auf bekannte Koordinaten (Fallback)
+        console.log(`[JOB ${jobId}] Fallback: Klick auf Koordinaten`);
+        await page.mouse.click(988, 281); await page.waitForTimeout(500);
+        await page.keyboard.type(firma, { delay: 30 }); await page.waitForTimeout(300);
+        await page.mouse.click(988, 345); await page.waitForTimeout(500);
+        await page.keyboard.type(user, { delay: 30 }); await page.waitForTimeout(300);
+        await page.mouse.click(988, 406); await page.waitForTimeout(500);
+        await page.keyboard.type(pass, { delay: 30 }); await page.waitForTimeout(300);
+      }
+
+      // Login Button klicken
+      const loginBtn = await page.$('button[type="submit"], input[type="submit"], button:has-text("Login"), .login-button');
+      if (loginBtn) {
+        await loginBtn.click();
+      } else {
+        await page.mouse.click(988, 485); // Fallback Koordinate
+      }
+      
+      console.log(`[JOB ${jobId}] Login abgeschickt, warte auf Seite...`);
+      await page.waitForTimeout(5000);
+
+      // Pop-up schliessen falls vorhanden
+      try {
+        const okBtn = await page.$('button:has-text("OK"), .modal button, .dialog button');
+        if (okBtn) { await okBtn.click(); await page.waitForTimeout(2000); }
+      } catch(e) {}
+
+      // Screenshot nach Login fuer Live View
+      const loginScreenshot = await page.screenshot({ encoding: 'base64', type: 'png' });
+      const currentJob1 = jobs.get(jobId);
+      if (currentJob1) currentJob1.lastScreenshot = loginScreenshot;
+
+      console.log(`[JOB ${jobId}] Login fertig! Suche Marke: ${marke}`);
+      updateJob(jobId, 'running', 4, `Eingeloggt! Suche ${marke}...`);
+
+    } catch (loginErr) {
+      console.log(`[JOB ${jobId}] Puppeteer Login Fehler: ${loginErr.message} - Claude uebernimmt`);
+    }
+
+    // ============================================================
+    // CLAUDE UEBERNIMMT AB HIER
+    // ============================================================
+
     // Teile-Liste als Text formatieren
     const teileText = teileListe.map((t, i) => `${i+1}. ${t}`).join('\n');
 
-    // EINFACHER PROMPT - Claude denkt selbst!
+    // PROMPT: Claude muss NICHT mehr einloggen!
     const systemPrompt = `Du bist ein erfahrener KFZ-Mechaniker der Partslink24 bedient.
 Du siehst den Bildschirm und navigierst wie ein Mensch.
 
+AKTUELLER STAND: Du bist bereits auf partslink24.com. Der Login wurde bereits durchgefuehrt!
+Pruefe den Screenshot: Wenn du eingeloggt bist (oben steht "Abmelden"), mache weiter mit der Suche.
+Wenn der Login NICHT geklappt hat, logge dich ein:
+Firmenkennung: ${firma} | Benutzer: ${user} | Passwort: ${pass}
+
 DEINE AUFGABE:
-1. Logge dich ein auf Partslink24 (Login-Felder sind rechts auf der Seite):
-   Firmenkennung: ${firma} | Benutzer: ${user} | Passwort: ${pass}
-2. Falls ein Pop-up kommt, klicke OK.
-3. Klicke auf das Logo der Marke "${marke || 'erkenne die Marke aus der VIN'}".
-4. Gib die VIN im Feld "Direkteinstieg" oben links ein: ${vin}
-5. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben:
+1. Falls noetig: Klicke auf das Logo der Marke "${marke || 'erkenne die Marke aus der VIN'}".
+2. Gib die VIN im Feld "Direkteinstieg" oben links ein: ${vin}
+3. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben:
 ${teileText}
-6. Fuer jedes Teil: Lies die OE-Nummern aus der Ergebnisliste.
-   NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug!
-   GRAUE Schrift = passt NICHT, ignorieren!
-7. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
+4. Fuer jedes Teil: Lies die OE-Nummern ab.
+5. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
 
 WICHTIG - SO LIEST DU OE-NUMMERN AB:
 - Nachdem du links ein Suchergebnis angeklickt hast, erscheinen die OE-Nummern RECHTS in der Detailansicht!
@@ -230,11 +310,11 @@ ERGEBNIS_ENDE
 
 Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
 
-    updateJob(jobId, 'running', 3, 'Navigiere Partslink24...');
+    updateJob(jobId, 'running', 5, 'Suche Teile...');
 
     let messages = [{
       role: 'user',
-      content: `Du bist auf partslink24.com. Logge dich ein und suche diese Teile fuer VIN ${vin} (${marke || 'Marke aus VIN erkennen'}):\n${teileText}\n\nMache zuerst einen Screenshot.`
+      content: `Du bist auf partslink24.com. Der Login wurde bereits durchgefuehrt. Mache einen Screenshot um zu sehen wo du bist. Falls du eingeloggt bist, suche diese Teile fuer VIN ${vin} (${marke || 'Marke aus VIN erkennen'}):\n${teileText}\n\nFalls du NICHT eingeloggt bist, logge dich zuerst ein.`
     }];
     
     let maxIterations = 50;
