@@ -209,9 +209,14 @@ ${teileText}
    GRAUE Schrift = passt NICHT, ignorieren!
 7. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
 
-WICHTIG:
-- Wenn du Teilenummern auf dem Bildschirm siehst, LIES SIE SOFORT AB!
-  Nicht weiter scrollen oder klicken wenn du Nummern sehen kannst!
+WICHTIG - SO LIEST DU OE-NUMMERN AB:
+- Nachdem du links ein Suchergebnis angeklickt hast, erscheinen die OE-Nummern RECHTS in der Detailansicht!
+- Die rechte Seite zeigt eine Explosionszeichnung und daneben eine Teileliste mit Teilenummern.
+- LIES DIE NUMMERN RECHTS AB! Nicht links weiter scrollen oder klicken!
+- NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug! GRAUE Schrift ignorieren!
+- Sobald du Teilenummern sehen kannst, schreibe sie sofort in ERGEBNIS_START!
+- WENN DU IN DEINEM TEXT EINE TEILENUMMER ERWAEHNT HAST, GIB SOFORT ERGEBNIS_START AUS!
+  Du brauchst nicht perfekt zu sein - Teilergebnisse sind besser als gar keine!
 - Suche Teile OHNE "VA" oder "HA" - nur z.B. "Bremsscheibe" nicht "Bremsscheibe VA"
 - Gib Teilergebnisse zurueck sobald du sie hast
 
@@ -275,7 +280,7 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
       // Check for results in text
       const textBlocks = apiResponse.content.filter(b => b.type === 'text');
       for (const tb of textBlocks) {
-        console.log(`[JOB ${jobId}] Text: ${tb.text.substring(0, 100)}...`);
+        console.log(`[JOB ${jobId}] Text: ${tb.text.substring(0, 200)}...`);
         const match = tb.text.match(/ERGEBNIS_START\s*([\s\S]*?)\s*ERGEBNIS_ENDE/);
         if (match) {
           try { 
@@ -283,6 +288,16 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
             console.log(`[JOB ${jobId}] ERGEBNIS: ${result.teile.length} Teile gefunden!`);
           } catch (e) { 
             console.log(`[JOB ${jobId}] JSON Parse Fehler: ${e.message}`); 
+          }
+        }
+        
+        // BACKUP: Wenn Claude OE-Nummern im Text erwaehnt aber kein ERGEBNIS_START nutzt
+        // Ab Iteration 20 automatisch extrahieren
+        if (!result && iteration >= 20) {
+          const autoExtract = extractOeFromText(tb.text);
+          if (autoExtract.teile.length > 0) {
+            console.log(`[JOB ${jobId}] AUTO-EXTRAKT: ${autoExtract.teile.length} OE-Nummern aus Text!`);
+            result = autoExtract;
           }
         }
       }
