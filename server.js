@@ -230,7 +230,7 @@ ERGEBNIS_ENDE
 
 Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
 
-    updateJob(jobId, 'running', 3, 'Claude navigiert Partslink24...');
+    updateJob(jobId, 'running', 3, 'Navigiere Partslink24...');
 
     let messages = [{
       role: 'user',
@@ -243,7 +243,7 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
 
     while (iteration < maxIterations) {
       iteration++;
-      updateJob(jobId, 'running', 3 + iteration, `Claude Schritt ${iteration}...`);
+      updateJob(jobId, 'running', 3 + iteration, `DECLAY Schritt ${iteration}...`);
       console.log(`[JOB ${jobId}] Iteration ${iteration}`);
 
       // Rate Limit Schutz
@@ -259,22 +259,24 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
         console.log(`[JOB ${jobId}] Konversation gekuerzt auf ${messages.length}`);
       }
 
-      // Claude API Call mit Retry
+      // Claude API Call mit Retry (429 Rate Limit + 529 Overloaded + fetch failed)
       let apiResponse = null;
       for (let retry = 0; retry < 3; retry++) {
         try {
           apiResponse = await callClaudeComputerUse(systemPrompt, messages);
           break;
         } catch (err) {
-          if (err.message.includes('429') && retry < 2) {
-            console.log(`[JOB ${jobId}] Rate Limit! Warte 65s (Retry ${retry + 1})`);
-            updateJob(jobId, 'running', 3 + iteration, `Rate Limit - warte... (Retry ${retry + 1})`);
-            await new Promise(r => setTimeout(r, 65000));
+          if ((err.message.includes('429') || err.message.includes('529') || err.message.includes('fetch failed')) && retry < 2) {
+            const waitTime = err.message.includes('529') ? 30 : err.message.includes('fetch') ? 30 : 65;
+            const reason = err.message.includes('529') ? 'Server ueberlastet' : err.message.includes('fetch') ? 'Verbindungsfehler' : 'Rate Limit';
+            console.log(`[JOB ${jobId}] ${reason}! Warte ${waitTime}s (Retry ${retry + 1})`);
+            updateJob(jobId, 'running', 3 + iteration, `${reason} - warte ${waitTime}s... (Retry ${retry + 1})`);
+            await new Promise(r => setTimeout(r, waitTime * 1000));
           } else { throw err; }
         }
       }
       
-      if (!apiResponse || !apiResponse.content) throw new Error('Keine Antwort von Claude API');
+      if (!apiResponse || !apiResponse.content) throw new Error('Keine Antwort vom Server');
       console.log(`[JOB ${jobId}] Stop reason: ${apiResponse.stop_reason}`);
 
       // Check for results in text
@@ -384,7 +386,7 @@ async function callClaudeComputerUse(systemPrompt, messages) {
   });
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Claude API ${response.status}: ${errText}`);
+    throw new Error(`API Fehler ${response.status}`);
   }
   return await response.json();
 }
