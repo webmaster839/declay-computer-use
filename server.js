@@ -305,13 +305,14 @@ WICHTIG - SO LIEST DU OE-NUMMERN AB:
 - Die rechte Seite zeigt eine Explosionszeichnung und daneben eine Teileliste mit Teilenummern.
 - LIES DIE NUMMERN RECHTS AB! Nicht links weiter scrollen oder klicken!
 - NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug! GRAUE Schrift ignorieren!
-- Sobald du Teilenummern sehen kannst, schreibe sie sofort in ERGEBNIS_START!
-- WENN DU IN DEINEM TEXT EINE TEILENUMMER ERWAEHNT HAST, GIB SOFORT ERGEBNIS_START AUS!
-  Du brauchst nicht perfekt zu sein - Teilergebnisse sind besser als gar keine!
 - Suche Teile OHNE "VA" oder "HA" - nur z.B. "Bremsscheibe" nicht "Bremsscheibe VA"
-- Gib Teilergebnisse zurueck sobald du sie hast
 
-ERGEBNIS FORMAT (wenn du OE-Nummern gefunden hast):
+ERGEBNIS SOFORT MELDEN - Teil fuer Teil:
+Sobald du die OE-Nummern fuer EIN Teil gefunden hast, melde es SOFORT mit:
+TEIL_GEFUNDEN: {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne"}
+Dann suche das naechste Teil!
+
+Wenn du ALLE Teile gesucht hast, gib die komplette Liste aus:
 ERGEBNIS_START
 {"teile": [
   {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne", "preis": "", "hersteller": "OE"},
@@ -321,7 +322,7 @@ ERGEBNIS_ENDE
 
 Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.
 ABER: Suche ZUERST ALLE Teile durch bevor du ERGEBNIS_START ausgibst!
-Wenn du ein Teil gefunden hast, merke dir die OE-Nummer und suche das naechste Teil.
+Wenn du ein Teil gefunden hast, melde es mit TEIL_GEFUNDEN und suche das naechste Teil.
 Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START aus.`;
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
@@ -377,18 +378,49 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
       const textBlocks = apiResponse.content.filter(b => b.type === 'text');
       for (const tb of textBlocks) {
         console.log(`[JOB ${jobId}] Text: ${tb.text.substring(0, 200)}...`);
+        
+        // TEIL_GEFUNDEN: Sofort zum Job hinzufuegen (stoppt NICHT die Suche!)
+        const teilMatches = [...tb.text.matchAll(/TEIL_GEFUNDEN:\s*(\{[^}]+\})/g)];
+        for (const tm of teilMatches) {
+          try {
+            const teil = JSON.parse(tm[1]);
+            const currentJob = jobs.get(jobId);
+            if (currentJob && teil.oe_nummer) {
+              // Duplikate vermeiden
+              const exists = currentJob.teile.some(t => t.oe_nummer === teil.oe_nummer);
+              if (!exists) {
+                currentJob.teile.push({ oe_nummer: teil.oe_nummer, bezeichnung: teil.bezeichnung || '', preis: '', hersteller: 'OE' });
+                console.log(`[JOB ${jobId}] TEIL LIVE: ${teil.oe_nummer} - ${teil.bezeichnung}`);
+                updateJob(jobId, 'running', 3 + iteration, `${currentJob.teile.length} Teile gefunden - suche weiter...`);
+              }
+            }
+          } catch(e) { console.log(`[JOB ${jobId}] TEIL_GEFUNDEN Parse Fehler`); }
+        }
+        
+        // ERGEBNIS_START: Alle Teile auf einmal (stoppt die Suche)
         const match = tb.text.match(/ERGEBNIS_START\s*([\s\S]*?)\s*ERGEBNIS_ENDE/);
         if (match) {
           try { 
-            result = JSON.parse(match[1]); 
+            const parsed = JSON.parse(match[1]);
+            // Merge mit bereits gefundenen Teilen
+            const currentJob = jobs.get(jobId);
+            if (currentJob && currentJob.teile.length > 0) {
+              // Neue Teile aus ERGEBNIS hinzufuegen die noch nicht da sind
+              for (const t of parsed.teile) {
+                const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
+                if (!exists) currentJob.teile.push(t);
+              }
+              result = { teile: currentJob.teile };
+            } else {
+              result = parsed;
+            }
             console.log(`[JOB ${jobId}] ERGEBNIS: ${result.teile.length} Teile gefunden!`);
           } catch (e) { 
             console.log(`[JOB ${jobId}] JSON Parse Fehler: ${e.message}`); 
           }
         }
         
-        // BACKUP: Wenn Claude OE-Nummern im Text erwaehnt aber kein ERGEBNIS_START nutzt
-        // Ab Iteration 20 automatisch extrahieren
+        // BACKUP: Ab Iteration 35 automatisch extrahieren
         if (!result && iteration >= 35) {
           const autoExtract = extractOeFromText(tb.text);
           if (autoExtract.teile.length > 0) {
