@@ -295,10 +295,19 @@ Firmenkennung: ${firma} | Benutzer: ${user} | Passwort: ${pass}
 DEINE AUFGABE:
 1. Falls noetig: Klicke auf das Logo der Marke "${marke || 'erkenne die Marke aus der VIN'}".
 2. Gib die VIN im Feld "Direkteinstieg" oben links ein: ${vin}
-3. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben:
+3. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben rechts:
 ${teileText}
 4. Fuer jedes Teil: Lies die OE-Nummern ab.
 5. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
+
+SO SUCHST DU NACHEINANDER MEHRERE TEILE:
+- Suche das erste Teil im Feld "Teile suchen" oben → Enter
+- Klicke links auf ein passendes Suchergebnis
+- Lies die OE-Nummern RECHTS ab (nur schwarze Schrift!)
+- DANN: Klicke auf das X um die Suche zu schliessen
+- Klicke wieder ins "Teile suchen" Feld oben → loesche den alten Text (alles markieren + loeschen)
+- Tippe das naechste Teil → Enter → wieder OE-Nummern ablesen
+- Wiederhole bis alle Teile gesucht sind!
 
 WICHTIG - SO LIEST DU OE-NUMMERN AB:
 - Nachdem du links ein Suchergebnis angeklickt hast, erscheinen die OE-Nummern RECHTS in der Detailansicht!
@@ -310,7 +319,7 @@ WICHTIG - SO LIEST DU OE-NUMMERN AB:
 ERGEBNIS SOFORT MELDEN - Teil fuer Teil:
 Sobald du die OE-Nummern fuer EIN Teil gefunden hast, melde es SOFORT mit:
 TEIL_GEFUNDEN: {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne"}
-Dann suche das naechste Teil!
+Dann schliesse die Suche (X klicken) und suche das naechste Teil!
 
 Wenn du ALLE Teile gesucht hast, gib die komplette Liste aus:
 ERGEBNIS_START
@@ -322,7 +331,7 @@ ERGEBNIS_ENDE
 
 Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.
 ABER: Suche ZUERST ALLE Teile durch bevor du ERGEBNIS_START ausgibst!
-Wenn du ein Teil gefunden hast, melde es mit TEIL_GEFUNDEN und suche das naechste Teil.
+Wenn du ein Teil gefunden hast, melde es mit TEIL_GEFUNDEN, schliesse die Suche, und suche das naechste Teil.
 Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START aus.`;
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
