@@ -420,12 +420,45 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
           }
         }
         
-        // BACKUP: Ab Iteration 35 automatisch extrahieren
-        if (!result && iteration >= 35) {
+        // BACKUP: OE-Nummern aus Claudes Text sammeln (laufend!)
+        const foundInText = extractOeFromText(tb.text);
+        if (foundInText.teile.length > 0) {
+          const currentJob = jobs.get(jobId);
+          if (currentJob) {
+            for (const t of foundInText.teile) {
+              const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
+              if (!exists) {
+                currentJob.teile.push(t);
+                console.log(`[JOB ${jobId}] AUTO-SAMMLUNG: ${t.oe_nummer}`);
+              }
+            }
+          }
+        }
+        
+        // AUTO-EXTRAKT: Ab Iteration 20 OE-Nummern direkt aus Claudes Text extrahieren
+        if (!result && iteration >= 20) {
           const autoExtract = extractOeFromText(tb.text);
           if (autoExtract.teile.length > 0) {
-            console.log(`[JOB ${jobId}] AUTO-EXTRAKT: ${autoExtract.teile.length} OE-Nummern aus Text!`);
-            result = autoExtract;
+            const currentJob = jobs.get(jobId);
+            if (currentJob) {
+              for (const t of autoExtract.teile) {
+                const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
+                if (!exists) {
+                  currentJob.teile.push(t);
+                  console.log(`[JOB ${jobId}] AUTO-EXTRAKT LIVE: ${t.oe_nummer}`);
+                }
+              }
+              updateJob(jobId, 'running', 3 + iteration, `${currentJob.teile.length} OE-Nummern gefunden - suche weiter...`);
+            }
+          }
+        }
+        
+        // Ab Iteration 30: Wenn wir gesammelte Nummern haben, Ergebnis liefern
+        if (!result && iteration >= 30) {
+          const currentJob = jobs.get(jobId);
+          if (currentJob && currentJob.teile.length > 0) {
+            console.log(`[JOB ${jobId}] AUTO-EXTRAKT FERTIG: ${currentJob.teile.length} OE-Nummern!`);
+            result = { teile: currentJob.teile };
           }
         }
       }
@@ -601,6 +634,9 @@ function describeAction(action, password) {
 }
 
 function extractOeFromText(text) {
+  // Markdown Formatierung entfernen (Claude schreibt **1K0 615 601 AA**)
+  const cleanText = text.replace(/\*\*/g, '').replace(/\*/g, '');
+  
   const patterns = [
     /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
     /\b[A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
@@ -609,7 +645,7 @@ function extractOeFromText(text) {
   ];
   const found = new Set();
   for (const p of patterns) {
-    const m = text.match(p);
+    const m = cleanText.match(p);
     if (m) m.forEach(x => {
       const clean = x.replace(/\s+/g, ' ').trim();
       if (clean.length >= 9) found.add(clean);
