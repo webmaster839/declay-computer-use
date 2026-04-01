@@ -319,7 +319,10 @@ ERGEBNIS_START
 ]}
 ERGEBNIS_ENDE
 
-Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
+Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.
+ABER: Suche ZUERST ALLE Teile durch bevor du ERGEBNIS_START ausgibst!
+Wenn du ein Teil gefunden hast, merke dir die OE-Nummer und suche das naechste Teil.
+Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START aus.`;
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
 
@@ -386,7 +389,7 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
         
         // BACKUP: Wenn Claude OE-Nummern im Text erwaehnt aber kein ERGEBNIS_START nutzt
         // Ab Iteration 20 automatisch extrahieren
-        if (!result && iteration >= 20) {
+        if (!result && iteration >= 35) {
           const autoExtract = extractOeFromText(tb.text);
           if (autoExtract.teile.length > 0) {
             console.log(`[JOB ${jobId}] AUTO-EXTRAKT: ${autoExtract.teile.length} OE-Nummern aus Text!`);
