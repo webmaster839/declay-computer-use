@@ -300,20 +300,28 @@ ${teileText}
 4. Fuer jedes Teil: Lies die OE-Nummern ab.
 5. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
 
-SO SUCHST DU NACHEINANDER MEHRERE TEILE:
-- Suche das erste Teil im Feld "Teile suchen" oben → Enter
-- Klicke links auf ein passendes Suchergebnis
-- Lies die OE-Nummern RECHTS ab (nur schwarze Schrift!)
-- DANN: Klicke auf das X um die Suche zu schliessen
-- Klicke wieder ins "Teile suchen" Feld oben → loesche den alten Text (alles markieren + loeschen)
-- Tippe das naechste Teil → Enter → wieder OE-Nummern ablesen
-- Wiederhole bis alle Teile gesucht sind!
+SO SUCHST DU TEILE - SCHRITT FUER SCHRITT:
+1. Klicke ins "Teile suchen" Feld oben rechts
+2. Tippe den Suchbegriff (z.B. "bremsscheibe") → Enter
+3. SOFORT: Klicke links auf das ERSTE passende Suchergebnis (z.B. "5Q0 615 301 H")!
+4. Rechts erscheint die Explosionszeichnung + Teileliste
+5. Klicke rechts auf das (i) Symbol neben dem Hauptteil (z.B. Bremsscheibe)
+6. Es oeffnet sich "Preise / Bestaende aktualisieren" mit:
+   - OE-Nummer + Preis
+   - "Wird oft zusammen gekauft" → dort stehen die passenden Belaege/Zubehoer!
+7. Lies ALLE Nummern + Preise ab (Hauptteil + "Wird oft zusammen gekauft")
+8. Klicke auf das X um die Suche zu schliessen
+9. Loesche das Suchfeld (Ctrl+A dann Delete) → naechstes Teil suchen
 
-WICHTIG - SO LIEST DU OE-NUMMERN AB:
-- Nachdem du links ein Suchergebnis angeklickt hast, erscheinen die OE-Nummern RECHTS in der Detailansicht!
-- Die rechte Seite zeigt eine Explosionszeichnung und daneben eine Teileliste mit Teilenummern.
-- LIES DIE NUMMERN RECHTS AB! Nicht links weiter scrollen oder klicken!
-- NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug! GRAUE Schrift ignorieren!
+VERBOTEN:
+- NICHT in der linken Suchergebnisliste endlos scrollen! Klicke auf das ERSTE passende Ergebnis!
+- NICHT mehr als 3 Mal scrollen pro Teil! Wenn du Nummern hast, reicht das!
+- NICHT ohne das (i) zu klicken weitersuchen - dort stehen Preise und Zubehoer!
+
+WICHTIG - OE-NUMMERN ABLESEN:
+- Klicke IMMER auf das (i) Symbol rechts neben dem Teil!
+- Das (i) zeigt: OE-Nummer, Preis, UND passende Belaege/Zubehoer!
+- NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug! GRAUE ignorieren!
 - Suche Teile OHNE "VA" oder "HA" - nur z.B. "Bremsscheibe" nicht "Bremsscheibe VA"
 
 ERGEBNIS SOFORT MELDEN - Teil fuer Teil:
@@ -454,7 +462,7 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
                 const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
                 if (!exists) {
                   currentJob.teile.push(t);
-                  console.log(`[JOB ${jobId}] AUTO-EXTRAKT LIVE: ${t.oe_nummer}`);
+                  console.log(`[JOB ${jobId}] AUTO-EXTRAKT LIVE: ${t.oe_nummer} - ${t.bezeichnung}`);
                 }
               }
               updateJob(jobId, 'running', 3 + iteration, `${currentJob.teile.length} OE-Nummern gefunden - suche weiter...`);
@@ -462,7 +470,18 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
           }
         }
         
-        // Ab Iteration 30: Wenn wir gesammelte Nummern haben, Ergebnis liefern
+        // WEITER ZUM NAECHSTEN TEIL: Wenn wir OE-Nummern haben und Claude noch scrollt
+        const currentJob = jobs.get(jobId);
+        if (currentJob && currentJob.teile.length >= 2 && iteration >= 22) {
+          // Claude hat genug Nummern fuer dieses Teil - zum naechsten!
+          console.log(`[JOB ${jobId}] WEITER: ${currentJob.teile.length} Nummern gefunden, forciere naechstes Teil!`);
+          messages.push({
+            role: 'user',
+            content: `STOPP! Du hast bereits ${currentJob.teile.length} OE-Nummern fuer dieses Teil gefunden. Hoer auf zu scrollen! Klicke auf das X um die Suche zu schliessen, dann klicke ins "Teile suchen" Feld, loesche den Text (Ctrl+A dann Delete), und suche das naechste Teil aus der Liste!`
+          });
+        }
+        
+        // Ab Iteration 35: Wenn wir gesammelte Nummern haben, Ergebnis liefern
         if (!result && iteration >= 30) {
           const currentJob = jobs.get(jobId);
           if (currentJob && currentJob.teile.length > 0) {
@@ -646,21 +665,43 @@ function extractOeFromText(text) {
   // Markdown Formatierung entfernen (Claude schreibt **1K0 615 601 AA**)
   const cleanText = text.replace(/\*\*/g, '').replace(/\*/g, '');
   
-  const patterns = [
-    /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
-    /\b[A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
-    /\b\d{4}\.[A-Z]\d\b/g,
-    /\b\d{2}\.\d{2}\.\d\.\d{3}\.\d{3}\b/g,
+  // OE-Nummern MIT Bezeichnung extrahieren
+  // Claude schreibt z.B.: "5Q0 615 301 H - Bremsscheibe (belüftet) HORUM"
+  const found = new Map(); // Map statt Set um Bezeichnung zu speichern
+  
+  // Pattern: OE-Nummer gefolgt von " - " und Beschreibung
+  const withDesc = [
+    /(\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,
+    /([A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,
   ];
-  const found = new Set();
-  for (const p of patterns) {
-    const m = cleanText.match(p);
-    if (m) m.forEach(x => {
-      const clean = x.replace(/\s+/g, ' ').trim();
-      if (clean.length >= 9) found.add(clean);
-    });
+  
+  for (const p of withDesc) {
+    let match;
+    while ((match = p.exec(cleanText)) !== null) {
+      const oe = match[1].replace(/\s+/g, ' ').trim();
+      const bez = match[2].trim().replace(/\(.*$/, '').trim(); // Klammern am Ende entfernen
+      if (oe.length >= 9 && !found.has(oe)) {
+        found.set(oe, bez);
+      }
+    }
   }
-  return { teile: Array.from(found).map(oe => ({ oe_nummer: oe, bezeichnung: '', preis: '', hersteller: 'OE' })) };
+  
+  // Fallback: Nur Nummern ohne Bezeichnung
+  if (found.size === 0) {
+    const patterns = [
+      /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
+      /\b[A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
+    ];
+    for (const p of patterns) {
+      const m = cleanText.match(p);
+      if (m) m.forEach(x => {
+        const clean = x.replace(/\s+/g, ' ').trim();
+        if (clean.length >= 9 && !found.has(clean)) found.set(clean, '');
+      });
+    }
+  }
+  
+  return { teile: Array.from(found.entries()).map(([oe, bez]) => ({ oe_nummer: oe, bezeichnung: bez, preis: '', hersteller: 'OE' })) };
 }
 
 function updateJob(jobId, status, step, message) {
