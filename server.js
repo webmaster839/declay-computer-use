@@ -85,14 +85,25 @@ app.get('/view/:jobId', (req, res) => {
   res.end(img);
 });
 
+// Passwort-Check fuer Live View
+const LIVE_PW = process.env.LIVE_PASSWORD || '';
+function checkLivePw(req, res) {
+  if (!LIVE_PW) return true; // Kein Passwort gesetzt = offen
+  if (req.query.pw === LIVE_PW) return true;
+  res.status(401).send('<html><body style="background:#080a08;color:#ef4444;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Zugang verweigert. Passwort fehlt.</p><p style="color:#39ff14;margin-top:20px">Nutze: /live?pw=DEIN_PASSWORT</p></body></html>');
+  return false;
+}
+
 // Live View Seite mit Auto-Refresh
 app.get('/live/:jobId', (req, res) => {
+  if (!checkLivePw(req, res)) return;
   const jobId = req.params.jobId;
   res.send(getLiveHtml(jobId));
 });
 
 // Live View OHNE JobId - zeigt automatisch den letzten/aktuellen Job
 app.get('/live', (req, res) => {
+  if (!checkLivePw(req, res)) return;
   // Finde den aktuellsten Job
   let latestJob = null;
   let latestId = null;
@@ -170,7 +181,7 @@ async function processSearchJob(jobId, vin, teileListe) {
   console.log(`[JOB ${jobId}] Marke: ${marke || 'unbekannt'} | ${teileListe.length} Teile zu suchen`);
 
   try {
-    updateJob(jobId, 'running', 1, 'Browser wird gestartet...');
+    updateJob(jobId, 'running', 1, 'Verbinde mit Teilekatalog...');
     browser = await puppeteer.launch({
       args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process'],
       defaultViewport: { width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT },
@@ -181,7 +192,7 @@ async function processSearchJob(jobId, vin, teileListe) {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    updateJob(jobId, 'running', 2, 'Oeffne Partslink24...');
+    updateJob(jobId, 'running', 2, 'Lade Teilekatalog...');
     await page.goto('https://www.partslink24.com', { waitUntil: 'networkidle2', timeout: 30000 });
     console.log(`[JOB ${jobId}] Partslink24 geladen`);
 
@@ -192,7 +203,7 @@ async function processSearchJob(jobId, vin, teileListe) {
     // ============================================================
     // PUPPETEER DIREKT-LOGIN (spart 12 API Calls!)
     // ============================================================
-    updateJob(jobId, 'running', 3, 'Login...');
+    updateJob(jobId, 'running', 3, 'Authentifiziere...');
     console.log(`[JOB ${jobId}] Puppeteer Login startet...`);
 
     try {
@@ -237,7 +248,7 @@ async function processSearchJob(jobId, vin, teileListe) {
       }
 
       // Login Button klicken
-      const loginBtn = await page.$('button[type="submit"], input[type="submit"], button:has-text("Login"), .login-button');
+      const loginBtn = await page.$('button[type="submit"], input[type="submit"], .login-button');
       if (loginBtn) {
         await loginBtn.click();
       } else {
@@ -249,7 +260,7 @@ async function processSearchJob(jobId, vin, teileListe) {
 
       // Pop-up schliessen falls vorhanden
       try {
-        const okBtn = await page.$('button:has-text("OK"), .modal button, .dialog button');
+        const okBtn = await page.$('.modal button, .dialog button, button[type="button"]');
         if (okBtn) { await okBtn.click(); await page.waitForTimeout(2000); }
       } catch(e) {}
 
@@ -323,13 +334,13 @@ Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.`;
 
     while (iteration < maxIterations) {
       iteration++;
-      updateJob(jobId, 'running', 3 + iteration, `DECLAY Schritt ${iteration}...`);
+      updateJob(jobId, 'running', 3 + iteration, `Analysiere Katalog...`);
       console.log(`[JOB ${jobId}] Iteration ${iteration}`);
 
       // Rate Limit Schutz
       if (iteration > 1) {
         console.log(`[JOB ${jobId}] Warte 10 Sekunden...`);
-        updateJob(jobId, 'running', 3 + iteration, `Navigiere... (Schritt ${iteration})`);
+        updateJob(jobId, 'running', 3 + iteration, `Identifiziere OE-Nummern...`);
         await new Promise(r => setTimeout(r, 10000));
       }
 
@@ -542,15 +553,15 @@ function mapKey(key) {
 }
 
 function describeAction(action, password) {
-  const safeText = (action.text === password) ? '****' : (action.text || '');
+  // Neutrale Beschreibungen - keine Browser-Aktionen zeigen
   switch (action.action) {
-    case 'screenshot': return 'Screenshot...';
-    case 'left_click': return `Klick (${action.coordinate?.join(',')})`;
-    case 'type': return `Tippe "${safeText.substring(0, 20)}"`;
-    case 'key': return `Taste ${action.text}`;
-    case 'scroll': return `Scroll ${action.direction || 'down'}`;
-    case 'wait': return 'Warte...';
-    default: return action.action;
+    case 'screenshot': return 'Analysiere...';
+    case 'left_click': return 'Verarbeite...';
+    case 'type': return 'Suche Daten...';
+    case 'key': return 'Verarbeite...';
+    case 'scroll': return 'Durchsuche Katalog...';
+    case 'wait': return 'Warte auf Antwort...';
+    default: return 'Verarbeite...';
   }
 }
 
