@@ -9,11 +9,10 @@ app.use(express.json());
 
 // ============================================================
 // DECLAY Partslink Navigator v7.5
-// + AGGRESSIVER STOPP: Nach 2 OE-Nummern + Iteration 8 → naechstes Teil!
-// + Hard Stop bei Iteration 30 (statt 45)
-// + Max 40 Iterationen (statt 50)
-// + Teile-LISTE: 1x Login → alle Teile suchen → Logout
-// + 15 Messages Kontext
+// MINIMALER PROMPT — wie Chrome Extension!
+// Puppeteer: Login + VIN (3 Sekunden)
+// Claude: "Such die Teile" — fertig!
+// STOPP ab Iteration 8 | Hard Stop 30 | Max 40
 // ============================================================
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -48,13 +47,12 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'DECLAY v7.5', jobs: jobs.size, busy: activeJob });
 });
 
-// STOP Endpoint — Job sofort abbrechen
 app.get('/stop', (req, res) => {
   if (!activeJob) return res.json({ status: 'no_active_job' });
   for (const [id, job] of jobs) {
     if (job.status === 'running') {
       job._forceStop = true;
-      console.log(`[JOB ${id}] FORCE STOP via /stop endpoint`);
+      console.log(`[JOB ${id}] FORCE STOP via /stop`);
       return res.json({ status: 'stopping', jobId: id, teile: job.teile.length });
     }
   }
@@ -65,17 +63,16 @@ app.post('/search', (req, res) => {
   const { vin, bauteil, teile } = req.body;
   if (!vin) return res.status(400).json({ error: 'VIN erforderlich' });
   if (!bauteil && (!teile || teile.length === 0)) return res.status(400).json({ error: 'Bauteil oder Teile-Liste erforderlich' });
-  if (activeJob) return res.status(429).json({ error: 'Ein Job laeuft bereits. Bitte warten.' });
+  if (activeJob) return res.status(429).json({ error: 'Ein Job laeuft bereits' });
 
   const teileListe = teile || [bauteil];
-
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
   jobs.set(jobId, { status: 'starting', step: 0, message: 'Starte...', teile: [], error: null, teileListe, startedAt: new Date().toISOString() });
-  console.log(`[JOB ${jobId}] Gestartet: VIN=${vin} | Teile: ${teileListe.join(', ')}`);
+  console.log(`[JOB ${jobId}] Start: VIN=${vin} | Teile: ${teileListe.join(', ')}`);
   activeJob = true;
 
   processSearchJob(jobId, vin, teileListe).catch(err => {
-    console.error(`[JOB ${jobId}] Fataler Fehler:`, err.message);
+    console.error(`[JOB ${jobId}] Fatal:`, err.message);
     const job = jobs.get(jobId);
     if (job) { job.status = 'error'; job.error = err.message; }
   }).finally(() => { activeJob = false; });
@@ -91,7 +88,7 @@ app.get('/status/:jobId', (req, res) => {
 
 app.get('/view/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
-  if (!job || !job.lastScreenshot) return res.status(404).send('Kein Screenshot verfuegbar');
+  if (!job || !job.lastScreenshot) return res.status(404).send('Kein Screenshot');
   const img = Buffer.from(job.lastScreenshot, 'base64');
   res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': img.length, 'Cache-Control': 'no-cache' });
   res.end(img);
@@ -101,7 +98,7 @@ const LIVE_PW = process.env.LIVE_PASSWORD || '';
 function checkLivePw(req, res) {
   if (!LIVE_PW) return true;
   if (req.query.pw === LIVE_PW) return true;
-  res.status(401).send('<html><body style="background:#080a08;color:#ef4444;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Zugang verweigert. Passwort fehlt.</p><p style="color:#39ff14;margin-top:20px">Nutze: /live?pw=DEIN_PASSWORT</p></body></html>');
+  res.status(401).send('<html><body style="background:#080a08;color:#ef4444;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Zugang verweigert.</p></body></html>');
   return false;
 }
 
@@ -112,73 +109,32 @@ app.get('/live/:jobId', (req, res) => {
 
 app.get('/live', (req, res) => {
   if (!checkLivePw(req, res)) return;
-  let latestJob = null;
-  let latestId = null;
+  let latest = null, lid = null;
   for (const [id, job] of jobs) {
-    if (!latestJob || new Date(job.startedAt) > new Date(latestJob.startedAt)) {
-      latestJob = job;
-      latestId = id;
-    }
+    if (!latest || new Date(job.startedAt) > new Date(latest.startedAt)) { latest = job; lid = id; }
   }
-  if (!latestId) return res.send('<html><body style="background:#080a08;color:#39ff14;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Kein aktiver Job. Starte eine Suche in DECLAY!</p></body></html>');
-  res.send(getLiveHtml(latestId));
+  if (!lid) return res.send('<html><body style="background:#080a08;color:#39ff14;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Kein aktiver Job.</p></body></html>');
+  res.send(getLiveHtml(lid));
 });
 
 function getLiveHtml(jobId) {
-  return `<!DOCTYPE html>
-<html><head><title>DECLAY Live View</title>
-<style>
-  body { background: #080a08; color: #39ff14; font-family: monospace; margin: 0; padding: 16px; }
-  h1 { font-size: 18px; letter-spacing: 2px; }
-  #status { padding: 8px 16px; background: #0f1f0f; border: 1px solid #39ff14; border-radius: 8px; margin: 8px 0; font-size: 14px; }
-  #screenshot { max-width: 100%; border: 1px solid #39ff14; border-radius: 4px; margin-top: 8px; }
-  .done { color: #22c55e; }
-  .error { color: #ef4444; }
-</style>
-</head><body>
-<h1>DECLAY LIVE VIEW</h1>
-<div id="status">Verbinde...</div>
-<img id="screenshot" src="/view/${jobId}" onerror="this.style.display='none'" />
-<script>
-  const jobId = '${jobId}';
-  const statusEl = document.getElementById('status');
-  const imgEl = document.getElementById('screenshot');
-  
-  async function refresh() {
-    try {
-      const res = await fetch('/status/' + jobId);
-      const job = await res.json();
-      statusEl.textContent = 'Schritt ' + job.step + ': ' + job.message;
-      statusEl.className = job.status === 'done' ? 'done' : job.status === 'error' ? 'error' : '';
-      imgEl.src = '/view/' + jobId + '?t=' + Date.now();
-      imgEl.style.display = 'block';
-      if (job.status === 'done' || job.status === 'error') {
-        if (job.teile && job.teile.length > 0) statusEl.textContent += ' | ' + job.teile.length + ' Teile gefunden!';
-        return;
-      }
-      setTimeout(refresh, 3000);
-    } catch(e) {
-      statusEl.textContent = 'Warte auf Server...';
-      setTimeout(refresh, 5000);
-    }
-  }
-  refresh();
-</script>
-</body></html>`;
+  return `<!DOCTYPE html><html><head><title>DECLAY Live</title>
+<style>body{background:#080a08;color:#39ff14;font-family:monospace;margin:0;padding:16px}h1{font-size:18px;letter-spacing:2px}#s{padding:8px 16px;background:#0f1f0f;border:1px solid #39ff14;border-radius:8px;margin:8px 0;font-size:14px}#i{max-width:100%;border:1px solid #39ff14;border-radius:4px;margin-top:8px}.done{color:#22c55e}.error{color:#ef4444}</style></head><body>
+<h1>DECLAY LIVE VIEW</h1><div id="s">Verbinde...</div><img id="i" src="/view/${jobId}" onerror="this.style.display='none'"/>
+<script>const s=document.getElementById('s'),i=document.getElementById('i');async function r(){try{const j=await(await fetch('/status/${jobId}')).json();s.textContent='Schritt '+j.step+': '+j.message;s.className=j.status==='done'?'done':j.status==='error'?'error':'';i.src='/view/${jobId}?t='+Date.now();i.style.display='block';if(j.status==='done'||j.status==='error'){if(j.teile&&j.teile.length)s.textContent+=' | '+j.teile.length+' Teile!';return}setTimeout(r,3000)}catch(e){s.textContent='Warte...';setTimeout(r,5000)}}r();</script></body></html>`;
 }
 
 // ============================================================
-// MAIN PROCESSING
+// MAIN
 // ============================================================
 async function processSearchJob(jobId, vin, teileListe) {
   const job = jobs.get(jobId);
   let browser = null;
   const marke = getMarkeFromVin(vin);
-
-  console.log(`[JOB ${jobId}] Marke: ${marke || 'unbekannt'} | ${teileListe.length} Teile zu suchen`);
+  console.log(`[JOB ${jobId}] Marke: ${marke || '?'} | ${teileListe.length} Teile`);
 
   try {
-    updateJob(jobId, 'running', 1, 'Verbinde mit Teilekatalog...');
+    updateJob(jobId, 'running', 1, 'Verbinde...');
     browser = await puppeteer.launch({
       args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process'],
       defaultViewport: { width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT },
@@ -187,511 +143,226 @@ async function processSearchJob(jobId, vin, teileListe) {
     });
 
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-    updateJob(jobId, 'running', 2, 'Lade Teilekatalog...');
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    updateJob(jobId, 'running', 2, 'Lade Katalog...');
     await page.goto('https://www.partslink24.com', { waitUntil: 'networkidle2', timeout: 30000 });
-    console.log(`[JOB ${jobId}] Partslink24 geladen`);
 
     const firma = process.env.PARTSLINK_FIRMA || '';
     const user = process.env.PARTSLINK_USER || '';
     const pass = process.env.PARTSLINK_PASS || '';
 
     // ============================================================
-    // PUPPETEER DIREKT-LOGIN
+    // PUPPETEER: Login (3 Sekunden, kein Claude noetig)
     // ============================================================
-    updateJob(jobId, 'running', 3, 'Authentifiziere...');
-    console.log(`[JOB ${jobId}] Puppeteer Login startet...`);
-
+    updateJob(jobId, 'running', 3, 'Login...');
     try {
       await page.waitForTimeout(2000);
-      try {
-        const cookieBtn = await page.$('button[id*="cookie"], button[class*="cookie"], .cc-btn, #onetrust-accept-btn-handler');
-        if (cookieBtn) { await cookieBtn.click(); await page.waitForTimeout(1000); }
-      } catch(e) {}
-      try { await page.mouse.click(1119, 747); await page.waitForTimeout(1000); } catch(e) {}
+      try { const cb = await page.$('button[id*="cookie"],.cc-btn,#onetrust-accept-btn-handler'); if(cb){await cb.click();await page.waitForTimeout(1000);} } catch(e){}
+      try { await page.mouse.click(1119, 747); await page.waitForTimeout(1000); } catch(e){}
 
-      const inputs = await page.$$('input[type="text"], input[type="password"], input:not([type])');
-      console.log(`[JOB ${jobId}] ${inputs.length} Input-Felder gefunden`);
-      
+      const inputs = await page.$$('input[type="text"],input[type="password"],input:not([type])');
       if (inputs.length >= 3) {
-        await inputs[0].click();
-        await inputs[0].type(firma, { delay: 30 });
-        await page.waitForTimeout(300);
-        await inputs[1].click();
-        await inputs[1].type(user, { delay: 30 });
-        await page.waitForTimeout(300);
-        const passInput = await page.$('input[type="password"]') || inputs[2];
-        await passInput.click();
-        await passInput.type(pass, { delay: 30 });
-        await page.waitForTimeout(300);
+        await inputs[0].click(); await inputs[0].type(firma,{delay:30}); await page.waitForTimeout(300);
+        await inputs[1].click(); await inputs[1].type(user,{delay:30}); await page.waitForTimeout(300);
+        const pi = await page.$('input[type="password"]') || inputs[2];
+        await pi.click(); await pi.type(pass,{delay:30}); await page.waitForTimeout(300);
       } else {
-        console.log(`[JOB ${jobId}] Fallback: Klick auf Koordinaten`);
-        await page.mouse.click(988, 281); await page.waitForTimeout(500);
-        await page.keyboard.type(firma, { delay: 30 }); await page.waitForTimeout(300);
-        await page.mouse.click(988, 345); await page.waitForTimeout(500);
-        await page.keyboard.type(user, { delay: 30 }); await page.waitForTimeout(300);
-        await page.mouse.click(988, 406); await page.waitForTimeout(500);
-        await page.keyboard.type(pass, { delay: 30 }); await page.waitForTimeout(300);
+        await page.mouse.click(988,281); await page.waitForTimeout(500);
+        await page.keyboard.type(firma,{delay:30}); await page.waitForTimeout(300);
+        await page.mouse.click(988,345); await page.waitForTimeout(500);
+        await page.keyboard.type(user,{delay:30}); await page.waitForTimeout(300);
+        await page.mouse.click(988,406); await page.waitForTimeout(500);
+        await page.keyboard.type(pass,{delay:30}); await page.waitForTimeout(300);
       }
-
-      const loginBtn = await page.$('button[type="submit"], input[type="submit"], .login-button');
-      if (loginBtn) {
-        await loginBtn.click();
-      } else {
-        await page.mouse.click(988, 485);
-      }
-      
-      console.log(`[JOB ${jobId}] Login abgeschickt, warte auf Seite...`);
+      const lb = await page.$('button[type="submit"],input[type="submit"],.login-button');
+      if(lb){await lb.click();}else{await page.mouse.click(988,485);}
       await page.waitForTimeout(5000);
+      try{const ob=await page.$('.modal button,.dialog button');if(ob){await ob.click();await page.waitForTimeout(2000);}}catch(e){}
 
-      try {
-        const okBtn = await page.$('.modal button, .dialog button, button[type="button"]');
-        if (okBtn) { await okBtn.click(); await page.waitForTimeout(2000); }
-      } catch(e) {}
-
-      const loginScreenshot = await page.screenshot({ encoding: 'base64', type: 'png' });
-      const currentJob1 = jobs.get(jobId);
-      if (currentJob1) currentJob1.lastScreenshot = loginScreenshot;
-
-      console.log(`[JOB ${jobId}] Login fertig! Suche Marke: ${marke}`);
-      updateJob(jobId, 'running', 4, `Eingeloggt! Suche ${marke}...`);
-
-    } catch (loginErr) {
-      console.log(`[JOB ${jobId}] Puppeteer Login Fehler: ${loginErr.message} - Claude uebernimmt`);
+      const ss = await page.screenshot({encoding:'base64',type:'png'});
+      const j1 = jobs.get(jobId); if(j1) j1.lastScreenshot = ss;
+      console.log(`[JOB ${jobId}] Login OK`);
+      updateJob(jobId, 'running', 4, 'Eingeloggt!');
+    } catch(e) {
+      console.log(`[JOB ${jobId}] Login Fehler: ${e.message}`);
     }
 
     // ============================================================
-    // CLAUDE UEBERNIMMT
+    // CLAUDE: Mini-Prompt wie Chrome Extension!
     // ============================================================
-    const teileText = teileListe.map((t, i) => `${i+1}. ${t}`).join('\n');
+    const teileText = teileListe.map((t,i) => `${i+1}. ${t}`).join('\n');
 
-    const systemPrompt = `Du bist ein erfahrener KFZ-Mechaniker der Partslink24 bedient.
-Du siehst den Bildschirm und navigierst wie ein Mensch.
+    const systemPrompt = `Du bist KFZ-Mechaniker und bedienst Partslink24.
+Login ist erledigt. VIN: ${vin} (${marke || 'Marke aus VIN'}).
 
-AKTUELLER STAND: Du bist bereits auf partslink24.com. Der Login wurde bereits durchgefuehrt!
-Pruefe den Screenshot: Wenn du eingeloggt bist (oben steht "Abmelden"), mache weiter mit der Suche.
-Wenn der Login NICHT geklappt hat, logge dich ein:
-Firmenkennung: ${firma} | Benutzer: ${user} | Passwort: ${pass}
-
-DEINE AUFGABE:
-1. Falls noetig: Klicke auf das Logo der Marke "${marke || 'erkenne die Marke aus der VIN'}".
-2. Gib die VIN im Feld "Direkteinstieg" oben links ein: ${vin}
-3. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben rechts:
+Such mir die passenden Ersatzteile:
 ${teileText}
-4. Fuer jedes Teil: Finde 2-3 OE-Nummern, melde sie, dann SOFORT naechstes Teil!
-5. Wenn du alle Teile hast, melde dich ab.
 
-PARTSLINK24 LAYOUT - IMMER GLEICH:
-- LINKS: Suchergebnis-Liste → klicke auf das ERSTE passende Ergebnis
-- MITTE: Explosionszeichnung → nur anschauen!
-- RECHTS: Teileverzeichnis mit (i) Buttons → klicke (i) fuer Preise + Zubehoer!
+Nutze das Suchfeld "Teile suchen" oben rechts. Pro Teil 2-3 OE-Nummern ablesen, dann weiter zum naechsten.
+Bei VAG (VW/Audi/Skoda/Seat): Nur SCHWARZE Teilenummern passen. Graue oder (1) = andere Variante, ignorieren!
+Klick auf (i) zeigt Preise und "Wird oft zusammen gekauft" — nuetzlich fuer Verbundteile wie Belaege.
 
-ABLAUF PRO TEIL — SCHNELL UND EFFIZIENT:
-1. Klicke ins Suchfeld oben rechts
-2. Tippe den Suchbegriff → Enter
-3. Klicke SOFORT links auf das ERSTE passende Ergebnis
-4. Lies 2-3 OE-Nummern RECHTS ab (NUR SCHWARZE Schrift!)
-5. Versuche auf (i) zu klicken → Preis + "Wird oft zusammen gekauft" ablesen
-6. Melde die Nummern mit TEIL_GEFUNDEN
-7. Klicke X → Suchfeld leeren → NAECHSTES TEIL!
-
-GESCHWINDIGKEIT IST WICHTIG:
-- 2-3 OE-Nummern pro Teil GENUEGEN! Nicht endlos weitersuchen!
-- MAXIMAL 5 Klicks pro Teil, dann weiter!
-- NICHT in Listen scrollen — ERSTES Ergebnis nehmen!
-- NICHT nach der "perfekten" Nummer suchen — 2 Nummern reichen!
-
-ERGEBNIS SOFORT MELDEN:
-Sobald du OE-Nummern fuer EIN Teil hast:
-TEIL_GEFUNDEN: {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne"}
-Dann X klicken → Suchfeld leeren → naechstes Teil!
-
-WENN ALLE TEILE GESUCHT — Gesamtergebnis:
-ERGEBNIS_START
-{"teile": [
-  {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe", "preis": "", "hersteller": "OE"}
-]}
-ERGEBNIS_ENDE
-
-VERBOTEN:
-- NICHT endlos scrollen!
-- NICHT mehr als 3x scrollen pro Teil!
-- NICHT bei einem Teil haengenbleiben wenn du schon 2 Nummern hast!
-- Suche OHNE Achsangabe: "Bremsscheibe" nicht "Bremsscheibe VA"`;
+Melde jede OE-Nummer so:
+TEIL_GEFUNDEN: {"oe_nummer": "XXX", "bezeichnung": "YYY"}`;
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
 
     let messages = [{
       role: 'user',
-      content: `Du bist auf partslink24.com. Der Login wurde bereits durchgefuehrt. Mache einen Screenshot um zu sehen wo du bist. Falls du eingeloggt bist, suche diese Teile fuer VIN ${vin} (${marke || 'Marke aus VIN erkennen'}):\n${teileText}\n\nFalls du NICHT eingeloggt bist, logge dich zuerst ein.\n\nWICHTIG: Pro Teil nur 2-3 OE-Nummern, dann SOFORT weiter zum naechsten Teil!`
+      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Gib die VIN ${vin} oben links bei "Direkteinstieg" ein und drueck GO. Dann such diese Teile:\n${teileText}`
     }];
-    
-    // ============================================================
-    // v7.5: Reduzierte Limits = weniger Geld verbrennen!
-    // ============================================================
-    let maxIterations = 40;  // war 50
-    let iteration = 0;
-    let result = null;
 
-    while (iteration < maxIterations) {
-      iteration++;
-      
-      // FORCE STOP via /stop Endpoint
-      const stopCheck = jobs.get(jobId);
-      if (stopCheck && stopCheck._forceStop) {
-        console.log(`[JOB ${jobId}] FORCE STOP! ${stopCheck.teile.length} Teile gesammelt.`);
-        result = { teile: stopCheck.teile };
-        break;
-      }
-      
-      updateJob(jobId, 'running', 3 + iteration, `Analysiere Katalog...`);
-      console.log(`[JOB ${jobId}] Iteration ${iteration}`);
+    let maxIter = 40, iter = 0, result = null;
 
-      if (iteration > 1) {
-        console.log(`[JOB ${jobId}] Warte 10 Sekunden...`);
-        updateJob(jobId, 'running', 3 + iteration, `Identifiziere OE-Nummern...`);
-        await new Promise(r => setTimeout(r, 10000));
-      }
+    while (iter < maxIter) {
+      iter++;
+      const sc = jobs.get(jobId);
+      if (sc && sc._forceStop) { result = {teile:sc.teile}; break; }
 
-      if (messages.length > 15) {
-        messages = [messages[0], ...messages.slice(-14)];
-        console.log(`[JOB ${jobId}] Konversation gekuerzt auf ${messages.length}`);
-      }
+      updateJob(jobId,'running',3+iter,'Analysiere...');
+      console.log(`[JOB ${jobId}] Iter ${iter}`);
+      if (iter > 1) { updateJob(jobId,'running',3+iter,'Identifiziere OE-Nummern...'); await new Promise(r=>setTimeout(r,10000)); }
+      if (messages.length > 15) { messages = [messages[0],...messages.slice(-14)]; }
 
-      let apiResponse = null;
+      let api = null;
       for (let retry = 0; retry < 3; retry++) {
-        try {
-          apiResponse = await callClaudeComputerUse(systemPrompt, messages);
-          break;
-        } catch (err) {
-          if ((err.message.includes('429') || err.message.includes('529') || err.message.includes('fetch failed')) && retry < 2) {
-            const waitTime = err.message.includes('529') ? 30 : err.message.includes('fetch') ? 30 : 65;
-            const reason = err.message.includes('529') ? 'Server ueberlastet' : err.message.includes('fetch') ? 'Verbindungsfehler' : 'Rate Limit';
-            console.log(`[JOB ${jobId}] ${reason}! Warte ${waitTime}s (Retry ${retry + 1})`);
-            updateJob(jobId, 'running', 3 + iteration, `${reason} - warte ${waitTime}s... (Retry ${retry + 1})`);
-            await new Promise(r => setTimeout(r, waitTime * 1000));
-          } else { throw err; }
+        try { api = await callClaude(systemPrompt, messages); break; }
+        catch(err) {
+          if ((err.message.includes('429')||err.message.includes('529')||err.message.includes('fetch failed')) && retry<2) {
+            const w = err.message.includes('529')?30:err.message.includes('fetch')?30:65;
+            console.log(`[JOB ${jobId}] Retry ${retry+1}, ${w}s`);
+            updateJob(jobId,'running',3+iter,`Warte ${w}s (Retry ${retry+1})`);
+            await new Promise(r=>setTimeout(r,w*1000));
+          } else throw err;
         }
       }
-      
-      if (!apiResponse || !apiResponse.content) throw new Error('Keine Antwort vom Server');
-      console.log(`[JOB ${jobId}] Stop reason: ${apiResponse.stop_reason}`);
+      if (!api||!api.content) throw new Error('Keine Antwort');
 
-      const textBlocks = apiResponse.content.filter(b => b.type === 'text');
-      for (const tb of textBlocks) {
-        console.log(`[JOB ${jobId}] Text: ${tb.text.substring(0, 200)}...`);
-        
+      const texts = api.content.filter(b=>b.type==='text');
+      for (const tb of texts) {
+        console.log(`[JOB ${jobId}] ${tb.text.substring(0,120)}...`);
+
         // TEIL_GEFUNDEN
-        const teilMatches = [...tb.text.matchAll(/TEIL_GEFUNDEN:\s*(\{[^}]+\})/g)];
-        for (const tm of teilMatches) {
-          try {
-            const teil = JSON.parse(tm[1]);
-            const currentJob = jobs.get(jobId);
-            if (currentJob && teil.oe_nummer) {
-              const exists = currentJob.teile.some(t => t.oe_nummer === teil.oe_nummer);
-              if (!exists) {
-                currentJob.teile.push({ oe_nummer: teil.oe_nummer, bezeichnung: teil.bezeichnung || '', preis: '', hersteller: 'OE' });
-                console.log(`[JOB ${jobId}] TEIL LIVE: ${teil.oe_nummer} - ${teil.bezeichnung}`);
-                updateJob(jobId, 'running', 3 + iteration, `${currentJob.teile.length} Teile gefunden - suche weiter...`);
-              }
+        for (const tm of [...tb.text.matchAll(/TEIL_GEFUNDEN:\s*(\{[^}]+\})/g)]) {
+          try { const t=JSON.parse(tm[1]); const cj=jobs.get(jobId);
+            if(cj&&t.oe_nummer&&!cj.teile.some(x=>x.oe_nummer===t.oe_nummer)){
+              cj.teile.push({oe_nummer:t.oe_nummer,bezeichnung:t.bezeichnung||'',preis:'',hersteller:'OE'});
+              console.log(`[JOB ${jobId}] TEIL: ${t.oe_nummer}`);
             }
-          } catch(e) { console.log(`[JOB ${jobId}] TEIL_GEFUNDEN Parse Fehler`); }
+          } catch(e){}
         }
-        
+
         // ERGEBNIS_START
-        const match = tb.text.match(/ERGEBNIS_START\s*([\s\S]*?)\s*ERGEBNIS_ENDE/);
-        if (match) {
-          try { 
-            const parsed = JSON.parse(match[1]);
-            const currentJob = jobs.get(jobId);
-            if (currentJob && currentJob.teile.length > 0) {
-              for (const t of parsed.teile) {
-                const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
-                if (!exists) currentJob.teile.push(t);
-              }
-              result = { teile: currentJob.teile };
-            } else {
-              result = parsed;
-            }
-            console.log(`[JOB ${jobId}] ERGEBNIS: ${result.teile.length} Teile gefunden!`);
-          } catch (e) { 
-            console.log(`[JOB ${jobId}] JSON Parse Fehler: ${e.message}`); 
-          }
-        }
-        
-        // OE-Nummern laufend aus Text sammeln
-        const foundInText = extractOeFromText(tb.text);
-        if (foundInText.teile.length > 0) {
-          const currentJob = jobs.get(jobId);
-          if (currentJob) {
-            for (const t of foundInText.teile) {
-              const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
-              if (!exists) {
-                currentJob.teile.push(t);
-                console.log(`[JOB ${jobId}] AUTO-SAMMLUNG: ${t.oe_nummer}`);
-              }
-            }
-          }
-        }
-        
-        // ============================================================
-        // v7.5: AGGRESSIVER STOPP — Ab Iteration 8 statt 20!
-        // ============================================================
-        const currentJob2 = jobs.get(jobId);
-        if (currentJob2 && currentJob2.teile.length >= 2 && iteration >= 8) {
-          console.log(`[JOB ${jobId}] STOPP-INJECTION: ${currentJob2.teile.length} Nummern bei Iteration ${iteration}!`);
-          currentJob2._forceNextTeil = `ACHTUNG! SOFORT AUFHOEREN MIT DIESEM TEIL!
+        const em = tb.text.match(/ERGEBNIS_START\s*([\s\S]*?)\s*ERGEBNIS_ENDE/);
+        if(em){try{const p=JSON.parse(em[1]);const cj=jobs.get(jobId);
+          if(cj&&cj.teile.length>0){for(const t of p.teile){if(!cj.teile.some(x=>x.oe_nummer===t.oe_nummer))cj.teile.push(t);}result={teile:cj.teile};}
+          else{result=p;}
+        }catch(e){}}
 
-Du hast bereits ${currentJob2.teile.length} OE-Nummern gefunden. Das REICHT!
+        // Auto-Extrakt
+        const found = extractOe(tb.text);
+        if(found.length>0){const cj=jobs.get(jobId);if(cj){for(const t of found){if(!cj.teile.some(x=>x.oe_nummer===t.oe_nummer)){cj.teile.push(t);console.log(`[JOB ${jobId}] AUTO: ${t.oe_nummer}`);}}}}
 
-TU JETZT GENAU DAS — KEINE ANDERE AKTION:
-1. Klicke auf X oben links um die aktuelle Suche zu schliessen
-2. Klicke ins Suchfeld "Teile suchen" oben rechts
-3. Druecke Ctrl+A dann Delete
-4. Tippe das NAECHSTE Teil und druecke Enter
-
-Deine Teile-Liste:
-${teileText}
-
-NICHT WEITER SCROLLEN! NICHT WEITERE NUMMERN SUCHEN! SOFORT X KLICKEN UND NAECHSTES TEIL!`;
+        // STOPP ab Iteration 8 + 2 OE
+        const cj2=jobs.get(jobId);
+        if(cj2&&cj2.teile.length>=2&&iter>=8){
+          console.log(`[JOB ${jobId}] STOPP: ${cj2.teile.length} OE bei Iter ${iter}`);
+          cj2._forceNext=`Du hast ${cj2.teile.length} OE-Nummern. Reicht! Schliess die Suche (X), leere das Suchfeld, such das naechste Teil:\n${teileText}`;
         }
-        
-        // ============================================================
-        // v7.5: HARD STOP bei Iteration 30 statt 45
-        // ============================================================
-        if (!result && iteration >= 30) {
-          const currentJob = jobs.get(jobId);
-          if (currentJob && currentJob.teile.length > 0) {
-            console.log(`[JOB ${jobId}] HARD STOP: ${currentJob.teile.length} OE-Nummern nach ${iteration} Iterationen`);
-            result = { teile: currentJob.teile };
-          }
-        }
+
+        // Hard Stop 30
+        if(!result&&iter>=30){const cj=jobs.get(jobId);if(cj&&cj.teile.length>0){console.log(`[JOB ${jobId}] HARD STOP`);result={teile:cj.teile};}}
       }
-      if (result) break;
+      if(result) break;
 
-      const toolUseBlocks = apiResponse.content.filter(b => b.type === 'tool_use');
-      if (toolUseBlocks.length === 0) {
-        console.log(`[JOB ${jobId}] Keine Tool-Aufrufe mehr`);
-        const allText = textBlocks.map(b => b.text).join('\n');
-        result = extractOeFromText(allText);
-        break;
+      const tools = api.content.filter(b=>b.type==='tool_use');
+      if(tools.length===0){result={teile:jobs.get(jobId)?.teile||extractOe(texts.map(b=>b.text).join('\n'))};break;}
+
+      const tr = [];
+      for (const tool of tools) {
+        const a=tool.input, lt=(a.text===pass)?'****':(a.text||'');
+        console.log(`[JOB ${jobId}] ${a.action}`,a.coordinate||lt);
+        updateJob(jobId,'running',3+iter,describeAction(a));
+        await executeAction(page,a);
+        const ss=await page.screenshot({encoding:'base64',type:'png'});
+        const cj=jobs.get(jobId); if(cj) cj.lastScreenshot=ss;
+        tr.push({type:'tool_result',tool_use_id:tool.id,content:[{type:'image',source:{type:'base64',media_type:'image/png',data:ss}}]});
       }
 
-      const toolResults = [];
-      for (const toolUse of toolUseBlocks) {
-        const action = toolUse.input;
-        
-        const logText = (action.text === pass) ? '****' : (action.text || '');
-        console.log(`[JOB ${jobId}] Aktion: ${action.action}`, action.coordinate || logText);
-        updateJob(jobId, 'running', 3 + iteration, describeAction(action, pass));
+      const fj=jobs.get(jobId);
+      if(fj&&fj._forceNext){tr.push({type:'text',text:fj._forceNext});delete fj._forceNext;}
 
-        await executeAction(page, action);
-
-        const screenshot = await page.screenshot({ encoding: 'base64', type: 'png', fullPage: false });
-        
-        const currentJob = jobs.get(jobId);
-        if (currentJob) currentJob.lastScreenshot = screenshot;
-        
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } }]
-        });
-      }
-
-      // STOPP-Injection in die Tool-Result Message
-      const forceJob = jobs.get(jobId);
-      if (forceJob && forceJob._forceNextTeil) {
-        toolResults.push({ type: 'text', text: forceJob._forceNextTeil });
-        delete forceJob._forceNextTeil;
-      }
-
-      messages.push({ role: 'assistant', content: apiResponse.content });
-      messages.push({ role: 'user', content: toolResults });
+      messages.push({role:'assistant',content:api.content});
+      messages.push({role:'user',content:tr});
     }
 
-    await browser.close();
-    browser = null;
+    await browser.close(); browser=null;
 
-    if (result && result.teile && result.teile.length > 0) {
-      updateJob(jobId, 'done', iteration, `${result.teile.length} Teile gefunden!`);
-      job.teile = result.teile;
+    if(result&&result.teile&&result.teile.length>0){
+      updateJob(jobId,'done',iter,`${result.teile.length} Teile gefunden!`);
+      job.teile=result.teile;
     } else {
-      updateJob(jobId, 'done', iteration, 'Suche abgeschlossen');
-      job.teile = result?.teile || [];
+      updateJob(jobId,'done',iter,'Suche abgeschlossen');
+      job.teile=result?.teile||[];
     }
 
-  } catch (error) {
-    console.error(`[JOB ${jobId}] Fehler:`, error.message);
-    updateJob(jobId, 'error', 0, error.message);
-    job.error = error.message;
-    // Crash-Sicherheit: Bereits gefundene Teile behalten
-    if (job.teile && job.teile.length > 0) {
-      job.status = 'done';
-      job.message = `Suche abgebrochen, aber ${job.teile.length} OE-Nummern bereits gefunden!`;
-      console.log(`[JOB ${jobId}] CRASH-RECOVERY: ${job.teile.length} Teile gerettet!`);
+  } catch(error) {
+    console.error(`[JOB ${jobId}] Fehler:`,error.message);
+    if(job.teile&&job.teile.length>0){
+      job.status='done'; job.message=`Abgebrochen, ${job.teile.length} OE-Nummern gefunden!`;
+    } else {
+      updateJob(jobId,'error',0,error.message); job.error=error.message;
     }
   } finally {
-    if (browser) { try { await browser.close(); } catch (e) {} }
-    setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000);
+    if(browser){try{await browser.close();}catch(e){}}
+    setTimeout(()=>jobs.delete(jobId),10*60*1000);
   }
 }
 
 // ============================================================
-// CLAUDE API CALL
+// CLAUDE API
 // ============================================================
-async function callClaudeComputerUse(systemPrompt, messages) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'computer-use-2025-11-24'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      system: systemPrompt,
-      tools: [{ type: 'computer_20251124', name: 'computer', display_width_px: DISPLAY_WIDTH, display_height_px: DISPLAY_HEIGHT, display_number: 1 }],
-      messages: messages
-    })
+async function callClaude(sys, msgs) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','anthropic-beta':'computer-use-2025-11-24'},
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:4096,system:sys,
+      tools:[{type:'computer_20251124',name:'computer',display_width_px:DISPLAY_WIDTH,display_height_px:DISPLAY_HEIGHT,display_number:1}],messages:msgs})
   });
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`API Fehler ${response.status}`);
-  }
-  return await response.json();
+  if(!r.ok) throw new Error(`API ${r.status}`);
+  return await r.json();
 }
 
 // ============================================================
-// EXECUTE BROWSER ACTION
+// BROWSER ACTIONS
 // ============================================================
-async function executeAction(page, action) {
-  const delay = ms => new Promise(r => setTimeout(r, ms));
-  try {
-    switch (action.action) {
-      case 'screenshot': break;
-      case 'left_click':
-        if (action.coordinate) { await page.mouse.click(action.coordinate[0], action.coordinate[1]); await delay(1500); }
-        break;
-      case 'right_click':
-        if (action.coordinate) { await page.mouse.click(action.coordinate[0], action.coordinate[1], { button: 'right' }); await delay(500); }
-        break;
-      case 'double_click':
-        if (action.coordinate) { await page.mouse.click(action.coordinate[0], action.coordinate[1], { clickCount: 2 }); await delay(500); }
-        break;
-      case 'triple_click':
-        if (action.coordinate) { await page.mouse.click(action.coordinate[0], action.coordinate[1], { clickCount: 3 }); await delay(500); }
-        break;
-      case 'type':
-        if (action.text) { await page.keyboard.type(action.text, { delay: 50 }); await delay(500); }
-        break;
-      case 'key':
-        if (action.text) {
-          const keys = action.text.split('+');
-          if (keys.length > 1) {
-            for (let i = 0; i < keys.length - 1; i++) await page.keyboard.down(mapKey(keys[i].trim()));
-            await page.keyboard.press(mapKey(keys[keys.length - 1].trim()));
-            for (let i = keys.length - 2; i >= 0; i--) await page.keyboard.up(mapKey(keys[i].trim()));
-          } else { await page.keyboard.press(mapKey(action.text)); }
-          await delay(500);
-        }
-        break;
-      case 'mouse_move':
-        if (action.coordinate) { await page.mouse.move(action.coordinate[0], action.coordinate[1]); await delay(300); }
-        break;
-      case 'scroll':
-        if (action.coordinate) await page.mouse.move(action.coordinate[0], action.coordinate[1]);
-        const amt = action.amount || 3;
-        const dir = action.direction || 'down';
-        const dY = dir === 'down' ? amt * 100 : dir === 'up' ? -amt * 100 : 0;
-        const dX = dir === 'right' ? amt * 100 : dir === 'left' ? -amt * 100 : 0;
-        await page.mouse.wheel({ deltaX: dX, deltaY: dY });
-        await delay(800);
-        break;
-      case 'wait':
-        await delay((action.duration || 2) * 1000);
-        break;
-      case 'cursor_position': break;
-      default: console.log(`Unbekannte Aktion: ${action.action}`);
-    }
-  } catch (err) {
-    console.log(`Aktion Fehler (${action.action}): ${err.message}`);
-  }
+async function executeAction(page,a) {
+  const d=ms=>new Promise(r=>setTimeout(r,ms));
+  try{switch(a.action){
+    case 'screenshot':break;
+    case 'left_click':if(a.coordinate){await page.mouse.click(a.coordinate[0],a.coordinate[1]);await d(1500);}break;
+    case 'right_click':if(a.coordinate){await page.mouse.click(a.coordinate[0],a.coordinate[1],{button:'right'});await d(500);}break;
+    case 'double_click':if(a.coordinate){await page.mouse.click(a.coordinate[0],a.coordinate[1],{clickCount:2});await d(500);}break;
+    case 'triple_click':if(a.coordinate){await page.mouse.click(a.coordinate[0],a.coordinate[1],{clickCount:3});await d(500);}break;
+    case 'type':if(a.text){await page.keyboard.type(a.text,{delay:50});await d(500);}break;
+    case 'key':if(a.text){const k=a.text.split('+');if(k.length>1){for(let i=0;i<k.length-1;i++)await page.keyboard.down(mapKey(k[i].trim()));await page.keyboard.press(mapKey(k[k.length-1].trim()));for(let i=k.length-2;i>=0;i--)await page.keyboard.up(mapKey(k[i].trim()));}else await page.keyboard.press(mapKey(a.text));await d(500);}break;
+    case 'mouse_move':if(a.coordinate){await page.mouse.move(a.coordinate[0],a.coordinate[1]);await d(300);}break;
+    case 'scroll':if(a.coordinate)await page.mouse.move(a.coordinate[0],a.coordinate[1]);const amt=a.amount||3,dir=a.direction||'down';await page.mouse.wheel({deltaX:dir==='right'?amt*100:dir==='left'?-amt*100:0,deltaY:dir==='down'?amt*100:dir==='up'?-amt*100:0});await d(800);break;
+    case 'wait':await d((a.duration||2)*1000);break;
+  }}catch(err){console.log(`Fehler (${a.action}): ${err.message}`);}
 }
 
-// ============================================================
-// HELPERS
-// ============================================================
-function mapKey(key) {
-  const m = { 'Return':'Enter','return':'Enter','enter':'Enter','space':' ','Space':' ',
-    'ctrl':'Control','Ctrl':'Control','alt':'Alt','shift':'Shift','tab':'Tab','Tab':'Tab',
-    'escape':'Escape','Escape':'Escape','backspace':'Backspace','Backspace':'Backspace',
-    'delete':'Delete','Delete':'Delete','Page_Down':'PageDown','Page_Up':'PageUp',
-    'Home':'Home','End':'End','F5':'F5',
-    'ArrowUp':'ArrowUp','ArrowDown':'ArrowDown','ArrowLeft':'ArrowLeft','ArrowRight':'ArrowRight' };
-  return m[key] || key;
+function mapKey(k){const m={'Return':'Enter','return':'Enter','enter':'Enter','space':' ','Space':' ','ctrl':'Control','Ctrl':'Control','alt':'Alt','shift':'Shift','tab':'Tab','escape':'Escape','backspace':'Backspace','delete':'Delete','Delete':'Delete','Page_Down':'PageDown','Page_Up':'PageUp'};return m[k]||k;}
+function describeAction(a){return{screenshot:'Analysiere...',left_click:'Verarbeite...',type:'Suche Daten...',key:'Verarbeite...',scroll:'Durchsuche Katalog...',wait:'Warte...'}[a.action]||'Verarbeite...';}
+
+function extractOe(text){
+  const c=text.replace(/\*\*/g,'').replace(/\*/g,''),f=new Map();
+  for(const p of[/(\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,/([A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g]){let m;while((m=p.exec(c))!==null){const o=m[1].replace(/\s+/g,' ').trim();if(o.length>=9&&!f.has(o))f.set(o,m[2].trim().replace(/\(.*$/,'').trim());}}
+  if(f.size===0){for(const p of[/\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,/\b[A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g]){const m=c.match(p);if(m)m.forEach(x=>{const o=x.replace(/\s+/g,' ').trim();if(o.length>=9)f.set(o,'');});}}
+  return[...f].map(([o,b])=>({oe_nummer:o,bezeichnung:b,preis:'',hersteller:'OE'}));
 }
 
-function describeAction(action, password) {
-  switch (action.action) {
-    case 'screenshot': return 'Analysiere...';
-    case 'left_click': return 'Verarbeite...';
-    case 'type': return 'Suche Daten...';
-    case 'key': return 'Verarbeite...';
-    case 'scroll': return 'Durchsuche Katalog...';
-    case 'wait': return 'Warte auf Antwort...';
-    default: return 'Verarbeite...';
-  }
-}
+function updateJob(id,status,step,msg){const j=jobs.get(id);if(j){j.status=status;j.step=step;j.message=msg;}console.log(`[JOB ${id}] Step ${step}: ${msg}`);}
 
-function extractOeFromText(text) {
-  const cleanText = text.replace(/\*\*/g, '').replace(/\*/g, '');
-  const found = new Map();
-  
-  const withDesc = [
-    /(\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,
-    /([A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,
-  ];
-  
-  for (const p of withDesc) {
-    let match;
-    while ((match = p.exec(cleanText)) !== null) {
-      const oe = match[1].replace(/\s+/g, ' ').trim();
-      const bez = match[2].trim().replace(/\(.*$/, '').trim();
-      if (oe.length >= 9 && !found.has(oe)) {
-        found.set(oe, bez);
-      }
-    }
-  }
-  
-  if (found.size === 0) {
-    const patterns = [
-      /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
-      /\b[A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
-    ];
-    for (const p of patterns) {
-      const m = cleanText.match(p);
-      if (m) m.forEach(x => {
-        const clean = x.replace(/\s+/g, ' ').trim();
-        if (clean.length >= 9 && !found.has(clean)) found.set(clean, '');
-      });
-    }
-  }
-  
-  return { teile: Array.from(found.entries()).map(([oe, bez]) => ({ oe_nummer: oe, bezeichnung: bez, preis: '', hersteller: 'OE' })) };
-}
-
-function updateJob(jobId, status, step, message) {
-  const job = jobs.get(jobId);
-  if (job) { job.status = status; job.step = step; job.message = message; }
-  console.log(`[JOB ${jobId}] Step ${step}: ${message}`);
-}
-
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`DECLAY Partslink Navigator v7.5 auf Port ${PORT}`);
-  console.log(`AGGRESSIVER STOPP | Max 40 Iterationen | Hard Stop 30 | 15 Messages Kontext`);
-});
+const PORT=process.env.PORT||3001;
+app.listen(PORT,()=>{console.log(`DECLAY v7.5 Port ${PORT}`);console.log(`MINI-PROMPT | STOPP Iter 8 | Hard 30 | Max 40`);});
