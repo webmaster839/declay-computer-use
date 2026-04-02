@@ -484,7 +484,7 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
         }
         
         // Ab Iteration 35: Wenn wir gesammelte Nummern haben, Ergebnis liefern
-        if (!result && iteration >= 30) {
+        if (!result && iteration >= 45) {
           const currentJob = jobs.get(jobId);
           if (currentJob && currentJob.teile.length > 0) {
             console.log(`[JOB ${jobId}] AUTO-EXTRAKT FERTIG: ${currentJob.teile.length} OE-Nummern!`);
