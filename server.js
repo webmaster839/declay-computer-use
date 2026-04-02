@@ -8,11 +8,12 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================================
-// DECLAY Partslink Navigator v7.4
-// + Einfacher Prompt (Claude denkt selbst)
-// + Teile-LISTE statt einzelnes Bauteil
-// + 1x Login → alle Teile suchen → Logout
-// + 15 Messages Kontext (statt 9)
+// DECLAY Partslink Navigator v7.5
+// + AGGRESSIVER STOPP: Nach 2 OE-Nummern + Iteration 8 → naechstes Teil!
+// + Hard Stop bei Iteration 30 (statt 45)
+// + Max 40 Iterationen (statt 50)
+// + Teile-LISTE: 1x Login → alle Teile suchen → Logout
+// + 15 Messages Kontext
 // ============================================================
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -44,7 +45,20 @@ function getMarkeFromVin(vin) {
 }
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'DECLAY v7.4', jobs: jobs.size, busy: activeJob });
+  res.json({ status: 'ok', service: 'DECLAY v7.5', jobs: jobs.size, busy: activeJob });
+});
+
+// STOP Endpoint — Job sofort abbrechen
+app.get('/stop', (req, res) => {
+  if (!activeJob) return res.json({ status: 'no_active_job' });
+  for (const [id, job] of jobs) {
+    if (job.status === 'running') {
+      job._forceStop = true;
+      console.log(`[JOB ${id}] FORCE STOP via /stop endpoint`);
+      return res.json({ status: 'stopping', jobId: id, teile: job.teile.length });
+    }
+  }
+  res.json({ status: 'no_running_job' });
 });
 
 app.post('/search', (req, res) => {
@@ -53,7 +67,6 @@ app.post('/search', (req, res) => {
   if (!bauteil && (!teile || teile.length === 0)) return res.status(400).json({ error: 'Bauteil oder Teile-Liste erforderlich' });
   if (activeJob) return res.status(429).json({ error: 'Ein Job laeuft bereits. Bitte warten.' });
 
-  // Teile-Liste: entweder aus "teile" Array oder einzelnes "bauteil"
   const teileListe = teile || [bauteil];
 
   const jobId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -76,7 +89,6 @@ app.get('/status/:jobId', (req, res) => {
   res.json(job);
 });
 
-// Live Screenshot als Bild
 app.get('/view/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job || !job.lastScreenshot) return res.status(404).send('Kein Screenshot verfuegbar');
@@ -85,26 +97,21 @@ app.get('/view/:jobId', (req, res) => {
   res.end(img);
 });
 
-// Passwort-Check fuer Live View
 const LIVE_PW = process.env.LIVE_PASSWORD || '';
 function checkLivePw(req, res) {
-  if (!LIVE_PW) return true; // Kein Passwort gesetzt = offen
+  if (!LIVE_PW) return true;
   if (req.query.pw === LIVE_PW) return true;
   res.status(401).send('<html><body style="background:#080a08;color:#ef4444;font-family:monospace;padding:40px;text-align:center"><h1>DECLAY LIVE VIEW</h1><p>Zugang verweigert. Passwort fehlt.</p><p style="color:#39ff14;margin-top:20px">Nutze: /live?pw=DEIN_PASSWORT</p></body></html>');
   return false;
 }
 
-// Live View Seite mit Auto-Refresh
 app.get('/live/:jobId', (req, res) => {
   if (!checkLivePw(req, res)) return;
-  const jobId = req.params.jobId;
-  res.send(getLiveHtml(jobId));
+  res.send(getLiveHtml(req.params.jobId));
 });
 
-// Live View OHNE JobId - zeigt automatisch den letzten/aktuellen Job
 app.get('/live', (req, res) => {
   if (!checkLivePw(req, res)) return;
-  // Finde den aktuellsten Job
   let latestJob = null;
   let latestId = null;
   for (const [id, job] of jobs) {
@@ -143,22 +150,12 @@ function getLiveHtml(jobId) {
       const job = await res.json();
       statusEl.textContent = 'Schritt ' + job.step + ': ' + job.message;
       statusEl.className = job.status === 'done' ? 'done' : job.status === 'error' ? 'error' : '';
-      
       imgEl.src = '/view/' + jobId + '?t=' + Date.now();
       imgEl.style.display = 'block';
-      
-      if (job.status === 'done') {
-        statusEl.textContent += ' ✅';
-        if (job.teile && job.teile.length > 0) {
-          statusEl.textContent += ' | ' + job.teile.length + ' Teile gefunden!';
-        }
+      if (job.status === 'done' || job.status === 'error') {
+        if (job.teile && job.teile.length > 0) statusEl.textContent += ' | ' + job.teile.length + ' Teile gefunden!';
         return;
       }
-      if (job.status === 'error') {
-        statusEl.textContent += ' ❌';
-        return;
-      }
-      
       setTimeout(refresh, 3000);
     } catch(e) {
       statusEl.textContent = 'Warte auf Server...';
@@ -201,43 +198,34 @@ async function processSearchJob(jobId, vin, teileListe) {
     const pass = process.env.PARTSLINK_PASS || '';
 
     // ============================================================
-    // PUPPETEER DIREKT-LOGIN (spart 12 API Calls!)
+    // PUPPETEER DIREKT-LOGIN
     // ============================================================
     updateJob(jobId, 'running', 3, 'Authentifiziere...');
     console.log(`[JOB ${jobId}] Puppeteer Login startet...`);
 
     try {
-      // Cookie-Banner akzeptieren falls vorhanden
       await page.waitForTimeout(2000);
       try {
         const cookieBtn = await page.$('button[id*="cookie"], button[class*="cookie"], .cc-btn, #onetrust-accept-btn-handler');
         if (cookieBtn) { await cookieBtn.click(); await page.waitForTimeout(1000); }
       } catch(e) {}
-      // Auch per Klick auf bekannte Position (unten rechts)
       try { await page.mouse.click(1119, 747); await page.waitForTimeout(1000); } catch(e) {}
 
-      // Login-Felder ausfuellen (rechts auf der Seite)
-      // Finde alle Input-Felder
       const inputs = await page.$$('input[type="text"], input[type="password"], input:not([type])');
       console.log(`[JOB ${jobId}] ${inputs.length} Input-Felder gefunden`);
       
       if (inputs.length >= 3) {
-        // Methode 1: Direkt ueber gefundene Inputs
         await inputs[0].click();
         await inputs[0].type(firma, { delay: 30 });
         await page.waitForTimeout(300);
-        
         await inputs[1].click();
         await inputs[1].type(user, { delay: 30 });
         await page.waitForTimeout(300);
-        
-        // Passwort-Feld (letztes oder type=password)
         const passInput = await page.$('input[type="password"]') || inputs[2];
         await passInput.click();
         await passInput.type(pass, { delay: 30 });
         await page.waitForTimeout(300);
       } else {
-        // Methode 2: Klick auf bekannte Koordinaten (Fallback)
         console.log(`[JOB ${jobId}] Fallback: Klick auf Koordinaten`);
         await page.mouse.click(988, 281); await page.waitForTimeout(500);
         await page.keyboard.type(firma, { delay: 30 }); await page.waitForTimeout(300);
@@ -247,24 +235,21 @@ async function processSearchJob(jobId, vin, teileListe) {
         await page.keyboard.type(pass, { delay: 30 }); await page.waitForTimeout(300);
       }
 
-      // Login Button klicken
       const loginBtn = await page.$('button[type="submit"], input[type="submit"], .login-button');
       if (loginBtn) {
         await loginBtn.click();
       } else {
-        await page.mouse.click(988, 485); // Fallback Koordinate
+        await page.mouse.click(988, 485);
       }
       
       console.log(`[JOB ${jobId}] Login abgeschickt, warte auf Seite...`);
       await page.waitForTimeout(5000);
 
-      // Pop-up schliessen falls vorhanden
       try {
         const okBtn = await page.$('.modal button, .dialog button, button[type="button"]');
         if (okBtn) { await okBtn.click(); await page.waitForTimeout(2000); }
       } catch(e) {}
 
-      // Screenshot nach Login fuer Live View
       const loginScreenshot = await page.screenshot({ encoding: 'base64', type: 'png' });
       const currentJob1 = jobs.get(jobId);
       if (currentJob1) currentJob1.lastScreenshot = loginScreenshot;
@@ -277,13 +262,10 @@ async function processSearchJob(jobId, vin, teileListe) {
     }
 
     // ============================================================
-    // CLAUDE UEBERNIMMT AB HIER
+    // CLAUDE UEBERNIMMT
     // ============================================================
-
-    // Teile-Liste als Text formatieren
     const teileText = teileListe.map((t, i) => `${i+1}. ${t}`).join('\n');
 
-    // PROMPT: Claude muss NICHT mehr einloggen!
     const systemPrompt = `Du bist ein erfahrener KFZ-Mechaniker der Partslink24 bedient.
 Du siehst den Bildschirm und navigierst wie ein Mensch.
 
@@ -297,86 +279,86 @@ DEINE AUFGABE:
 2. Gib die VIN im Feld "Direkteinstieg" oben links ein: ${vin}
 3. Suche nacheinander folgende Teile ueber das Suchfeld "Teile suchen" oben rechts:
 ${teileText}
-4. Fuer jedes Teil: Lies die OE-Nummern ab.
-5. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
+4. Fuer jedes Teil: Finde 2-3 OE-Nummern, melde sie, dann SOFORT naechstes Teil!
+5. Wenn du alle Teile hast, melde dich ab.
 
 PARTSLINK24 LAYOUT - IMMER GLEICH:
-- LINKS: Suchergebnis-Liste → hier klickst du auf ein Teil
-- MITTE: Explosionszeichnung → nur anschauen, nicht klicken!
-- RECHTS: Teileverzeichnis mit (i) Buttons → hier klickst du (i) fuer Preise und Zubehoer!
-Dieses Layout ist IMMER gleich egal welches Teil du suchst.
+- LINKS: Suchergebnis-Liste → klicke auf das ERSTE passende Ergebnis
+- MITTE: Explosionszeichnung → nur anschauen!
+- RECHTS: Teileverzeichnis mit (i) Buttons → klicke (i) fuer Preise + Zubehoer!
 
-SO SUCHST DU TEILE - SCHRITT FUER SCHRITT:
-1. Klicke ins "Teile suchen" Feld oben rechts
-2. Tippe den Suchbegriff (z.B. "bremsscheibe") → Enter
-3. SOFORT: Klicke links auf das ERSTE passende Suchergebnis!
-4. Rechts erscheint die Explosionszeichnung + Teileliste
-5. Lies die OE-Nummern RECHTS ab (nur SCHWARZE Schrift = passt zum Fahrzeug!)
-6. VERSUCHE auf das (i) Symbol neben dem Hauptteil zu klicken:
-   - Wenn sich "Preise / Bestaende aktualisieren" oeffnet → lies Preis + "Wird oft zusammen gekauft" ab!
-   - Wenn kein (i) vorhanden oder nichts passiert → kein Problem, lies einfach die Nummern aus der Teileliste rechts ab
-7. Wenn du 2-3 OE-Nummern hast: FERTIG mit diesem Teil!
-8. Klicke auf das X um die Suche zu schliessen
-9. Loesche das Suchfeld (Ctrl+A dann Delete) → naechstes Teil suchen
+ABLAUF PRO TEIL — SCHNELL UND EFFIZIENT:
+1. Klicke ins Suchfeld oben rechts
+2. Tippe den Suchbegriff → Enter
+3. Klicke SOFORT links auf das ERSTE passende Ergebnis
+4. Lies 2-3 OE-Nummern RECHTS ab (NUR SCHWARZE Schrift!)
+5. Versuche auf (i) zu klicken → Preis + "Wird oft zusammen gekauft" ablesen
+6. Melde die Nummern mit TEIL_GEFUNDEN
+7. Klicke X → Suchfeld leeren → NAECHSTES TEIL!
 
-VERBOTEN:
-- NICHT in der linken Suchergebnisliste endlos scrollen! Klicke auf das ERSTE passende Ergebnis!
-- NICHT mehr als 3 Mal scrollen pro Teil in der rechten Teileliste!
-- Wenn du 2 OE-Nummern hast → SOFORT weiter zum naechsten Teil!
+GESCHWINDIGKEIT IST WICHTIG:
+- 2-3 OE-Nummern pro Teil GENUEGEN! Nicht endlos weitersuchen!
+- MAXIMAL 5 Klicks pro Teil, dann weiter!
+- NICHT in Listen scrollen — ERSTES Ergebnis nehmen!
+- NICHT nach der "perfekten" Nummer suchen — 2 Nummern reichen!
 
-WICHTIG - OE-NUMMERN ABLESEN:
-- OE-Nummern stehen RECHTS in der Teileliste neben der Explosionszeichnung
-- NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug! GRAUE ignorieren!
-- Suche Teile OHNE "VA" oder "HA" - nur z.B. "Bremsscheibe" nicht "Bremsscheibe VA"
-
-ERGEBNIS SOFORT MELDEN - Teil fuer Teil:
-Sobald du die OE-Nummern fuer EIN Teil gefunden hast, melde es SOFORT mit:
+ERGEBNIS SOFORT MELDEN:
+Sobald du OE-Nummern fuer EIN Teil hast:
 TEIL_GEFUNDEN: {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne"}
-Dann schliesse die Suche (X klicken) und suche das naechste Teil!
+Dann X klicken → Suchfeld leeren → naechstes Teil!
 
-Wenn du ALLE Teile gesucht hast, gib die komplette Liste aus:
+WENN ALLE TEILE GESUCHT — Gesamtergebnis:
 ERGEBNIS_START
 {"teile": [
-  {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe vorne", "preis": "", "hersteller": "OE"},
-  {"oe_nummer": "5K0 698 151", "bezeichnung": "Bremsbelag vorne", "preis": "", "hersteller": "OE"}
+  {"oe_nummer": "5Q0 615 301 H", "bezeichnung": "Bremsscheibe", "preis": "", "hersteller": "OE"}
 ]}
 ERGEBNIS_ENDE
 
-Auch Teilergebnisse sind OK! Lieber 3 von 5 Nummern liefern als gar keine.
-ABER: Suche ZUERST ALLE Teile durch bevor du ERGEBNIS_START ausgibst!
-Wenn du ein Teil gefunden hast, melde es mit TEIL_GEFUNDEN, schliesse die Suche, und suche das naechste Teil.
-Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START aus.`;
+VERBOTEN:
+- NICHT endlos scrollen!
+- NICHT mehr als 3x scrollen pro Teil!
+- NICHT bei einem Teil haengenbleiben wenn du schon 2 Nummern hast!
+- Suche OHNE Achsangabe: "Bremsscheibe" nicht "Bremsscheibe VA"`;
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
 
     let messages = [{
       role: 'user',
-      content: `Du bist auf partslink24.com. Der Login wurde bereits durchgefuehrt. Mache einen Screenshot um zu sehen wo du bist. Falls du eingeloggt bist, suche diese Teile fuer VIN ${vin} (${marke || 'Marke aus VIN erkennen'}):\n${teileText}\n\nFalls du NICHT eingeloggt bist, logge dich zuerst ein.`
+      content: `Du bist auf partslink24.com. Der Login wurde bereits durchgefuehrt. Mache einen Screenshot um zu sehen wo du bist. Falls du eingeloggt bist, suche diese Teile fuer VIN ${vin} (${marke || 'Marke aus VIN erkennen'}):\n${teileText}\n\nFalls du NICHT eingeloggt bist, logge dich zuerst ein.\n\nWICHTIG: Pro Teil nur 2-3 OE-Nummern, dann SOFORT weiter zum naechsten Teil!`
     }];
     
-    let maxIterations = 50;
+    // ============================================================
+    // v7.5: Reduzierte Limits = weniger Geld verbrennen!
+    // ============================================================
+    let maxIterations = 40;  // war 50
     let iteration = 0;
     let result = null;
 
     while (iteration < maxIterations) {
       iteration++;
+      
+      // FORCE STOP via /stop Endpoint
+      const stopCheck = jobs.get(jobId);
+      if (stopCheck && stopCheck._forceStop) {
+        console.log(`[JOB ${jobId}] FORCE STOP! ${stopCheck.teile.length} Teile gesammelt.`);
+        result = { teile: stopCheck.teile };
+        break;
+      }
+      
       updateJob(jobId, 'running', 3 + iteration, `Analysiere Katalog...`);
       console.log(`[JOB ${jobId}] Iteration ${iteration}`);
 
-      // Rate Limit Schutz
       if (iteration > 1) {
         console.log(`[JOB ${jobId}] Warte 10 Sekunden...`);
         updateJob(jobId, 'running', 3 + iteration, `Identifiziere OE-Nummern...`);
         await new Promise(r => setTimeout(r, 10000));
       }
 
-      // Konversation kuerzen: 15 statt 9 Messages behalten
       if (messages.length > 15) {
         messages = [messages[0], ...messages.slice(-14)];
         console.log(`[JOB ${jobId}] Konversation gekuerzt auf ${messages.length}`);
       }
 
-      // Claude API Call mit Retry (429 Rate Limit + 529 Overloaded + fetch failed)
       let apiResponse = null;
       for (let retry = 0; retry < 3; retry++) {
         try {
@@ -396,19 +378,17 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
       if (!apiResponse || !apiResponse.content) throw new Error('Keine Antwort vom Server');
       console.log(`[JOB ${jobId}] Stop reason: ${apiResponse.stop_reason}`);
 
-      // Check for results in text
       const textBlocks = apiResponse.content.filter(b => b.type === 'text');
       for (const tb of textBlocks) {
         console.log(`[JOB ${jobId}] Text: ${tb.text.substring(0, 200)}...`);
         
-        // TEIL_GEFUNDEN: Sofort zum Job hinzufuegen (stoppt NICHT die Suche!)
+        // TEIL_GEFUNDEN
         const teilMatches = [...tb.text.matchAll(/TEIL_GEFUNDEN:\s*(\{[^}]+\})/g)];
         for (const tm of teilMatches) {
           try {
             const teil = JSON.parse(tm[1]);
             const currentJob = jobs.get(jobId);
             if (currentJob && teil.oe_nummer) {
-              // Duplikate vermeiden
               const exists = currentJob.teile.some(t => t.oe_nummer === teil.oe_nummer);
               if (!exists) {
                 currentJob.teile.push({ oe_nummer: teil.oe_nummer, bezeichnung: teil.bezeichnung || '', preis: '', hersteller: 'OE' });
@@ -419,15 +399,13 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
           } catch(e) { console.log(`[JOB ${jobId}] TEIL_GEFUNDEN Parse Fehler`); }
         }
         
-        // ERGEBNIS_START: Alle Teile auf einmal (stoppt die Suche)
+        // ERGEBNIS_START
         const match = tb.text.match(/ERGEBNIS_START\s*([\s\S]*?)\s*ERGEBNIS_ENDE/);
         if (match) {
           try { 
             const parsed = JSON.parse(match[1]);
-            // Merge mit bereits gefundenen Teilen
             const currentJob = jobs.get(jobId);
             if (currentJob && currentJob.teile.length > 0) {
-              // Neue Teile aus ERGEBNIS hinzufuegen die noch nicht da sind
               for (const t of parsed.teile) {
                 const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
                 if (!exists) currentJob.teile.push(t);
@@ -442,7 +420,7 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
           }
         }
         
-        // BACKUP: OE-Nummern aus Claudes Text sammeln (laufend!)
+        // OE-Nummern laufend aus Text sammeln
         const foundInText = extractOeFromText(tb.text);
         if (foundInText.teile.length > 0) {
           const currentJob = jobs.get(jobId);
@@ -457,44 +435,41 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
           }
         }
         
-        // AUTO-EXTRAKT: Ab Iteration 20 OE-Nummern direkt aus Claudes Text extrahieren
-        if (!result && iteration >= 20) {
-          const autoExtract = extractOeFromText(tb.text);
-          if (autoExtract.teile.length > 0) {
-            const currentJob = jobs.get(jobId);
-            if (currentJob) {
-              for (const t of autoExtract.teile) {
-                const exists = currentJob.teile.some(x => x.oe_nummer === t.oe_nummer);
-                if (!exists) {
-                  currentJob.teile.push(t);
-                  console.log(`[JOB ${jobId}] AUTO-EXTRAKT LIVE: ${t.oe_nummer} - ${t.bezeichnung}`);
-                }
-              }
-              updateJob(jobId, 'running', 3 + iteration, `${currentJob.teile.length} OE-Nummern gefunden - suche weiter...`);
-            }
-          }
-        }
-        
-        // WEITER ZUM NAECHSTEN TEIL: Wenn wir OE-Nummern haben und Claude noch scrollt
+        // ============================================================
+        // v7.5: AGGRESSIVER STOPP — Ab Iteration 8 statt 20!
+        // ============================================================
         const currentJob2 = jobs.get(jobId);
-        if (currentJob2 && currentJob2.teile.length >= 2 && iteration >= 20) {
-          console.log(`[JOB ${jobId}] WEITER: ${currentJob2.teile.length} Nummern gefunden, forciere naechstes Teil!`);
-          // Flag setzen - wird in die naechste Tool-Result Message eingebaut
-          currentJob2._forceNextTeil = `WICHTIG: Du hast bereits ${currentJob2.teile.length} OE-Nummern gefunden! Das reicht fuer dieses Teil! JETZT SOFORT:\n1. Klicke auf das X oben links um die Suche zu schliessen\n2. Klicke ins "Teile suchen" Feld oben\n3. Druecke Ctrl+A dann Delete um den alten Text zu loeschen\n4. Tippe das NAECHSTE Teil aus der Liste und druecke Enter\n\nDeine Teile-Liste war:\n${teileText}\n\nHoer auf zu scrollen und suche das naechste Teil!`;
+        if (currentJob2 && currentJob2.teile.length >= 2 && iteration >= 8) {
+          console.log(`[JOB ${jobId}] STOPP-INJECTION: ${currentJob2.teile.length} Nummern bei Iteration ${iteration}!`);
+          currentJob2._forceNextTeil = `ACHTUNG! SOFORT AUFHOEREN MIT DIESEM TEIL!
+
+Du hast bereits ${currentJob2.teile.length} OE-Nummern gefunden. Das REICHT!
+
+TU JETZT GENAU DAS — KEINE ANDERE AKTION:
+1. Klicke auf X oben links um die aktuelle Suche zu schliessen
+2. Klicke ins Suchfeld "Teile suchen" oben rechts
+3. Druecke Ctrl+A dann Delete
+4. Tippe das NAECHSTE Teil und druecke Enter
+
+Deine Teile-Liste:
+${teileText}
+
+NICHT WEITER SCROLLEN! NICHT WEITERE NUMMERN SUCHEN! SOFORT X KLICKEN UND NAECHSTES TEIL!`;
         }
         
-        // Ab Iteration 35: Wenn wir gesammelte Nummern haben, Ergebnis liefern
-        if (!result && iteration >= 45) {
+        // ============================================================
+        // v7.5: HARD STOP bei Iteration 30 statt 45
+        // ============================================================
+        if (!result && iteration >= 30) {
           const currentJob = jobs.get(jobId);
           if (currentJob && currentJob.teile.length > 0) {
-            console.log(`[JOB ${jobId}] AUTO-EXTRAKT FERTIG: ${currentJob.teile.length} OE-Nummern!`);
+            console.log(`[JOB ${jobId}] HARD STOP: ${currentJob.teile.length} OE-Nummern nach ${iteration} Iterationen`);
             result = { teile: currentJob.teile };
           }
         }
       }
       if (result) break;
 
-      // End if no more tool calls
       const toolUseBlocks = apiResponse.content.filter(b => b.type === 'tool_use');
       if (toolUseBlocks.length === 0) {
         console.log(`[JOB ${jobId}] Keine Tool-Aufrufe mehr`);
@@ -503,12 +478,10 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
         break;
       }
 
-      // Execute actions
       const toolResults = [];
       for (const toolUse of toolUseBlocks) {
         const action = toolUse.input;
         
-        // Passwort maskieren
         const logText = (action.text === pass) ? '****' : (action.text || '');
         console.log(`[JOB ${jobId}] Aktion: ${action.action}`, action.coordinate || logText);
         updateJob(jobId, 'running', 3 + iteration, describeAction(action, pass));
@@ -517,7 +490,6 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
 
         const screenshot = await page.screenshot({ encoding: 'base64', type: 'png', fullPage: false });
         
-        // Screenshot im Job speichern fuer Live-View
         const currentJob = jobs.get(jobId);
         if (currentJob) currentJob.lastScreenshot = screenshot;
         
@@ -528,7 +500,7 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
         });
       }
 
-      // STOPP-Text in die Tool-Result Message einbauen (nicht als separate Message!)
+      // STOPP-Injection in die Tool-Result Message
       const forceJob = jobs.get(jobId);
       if (forceJob && forceJob._forceNextTeil) {
         toolResults.push({ type: 'text', text: forceJob._forceNextTeil });
@@ -554,6 +526,12 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
     console.error(`[JOB ${jobId}] Fehler:`, error.message);
     updateJob(jobId, 'error', 0, error.message);
     job.error = error.message;
+    // Crash-Sicherheit: Bereits gefundene Teile behalten
+    if (job.teile && job.teile.length > 0) {
+      job.status = 'done';
+      job.message = `Suche abgebrochen, aber ${job.teile.length} OE-Nummern bereits gefunden!`;
+      console.log(`[JOB ${jobId}] CRASH-RECOVERY: ${job.teile.length} Teile gerettet!`);
+    }
   } finally {
     if (browser) { try { await browser.close(); } catch (e) {} }
     setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000);
@@ -658,7 +636,6 @@ function mapKey(key) {
 }
 
 function describeAction(action, password) {
-  // Neutrale Beschreibungen - keine Browser-Aktionen zeigen
   switch (action.action) {
     case 'screenshot': return 'Analysiere...';
     case 'left_click': return 'Verarbeite...';
@@ -671,14 +648,9 @@ function describeAction(action, password) {
 }
 
 function extractOeFromText(text) {
-  // Markdown Formatierung entfernen (Claude schreibt **1K0 615 601 AA**)
   const cleanText = text.replace(/\*\*/g, '').replace(/\*/g, '');
+  const found = new Map();
   
-  // OE-Nummern MIT Bezeichnung extrahieren
-  // Claude schreibt z.B.: "5Q0 615 301 H - Bremsscheibe (belüftet) HORUM"
-  const found = new Map(); // Map statt Set um Bezeichnung zu speichern
-  
-  // Pattern: OE-Nummer gefolgt von " - " und Beschreibung
   const withDesc = [
     /(\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,
     /([A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,
@@ -688,14 +660,13 @@ function extractOeFromText(text) {
     let match;
     while ((match = p.exec(cleanText)) !== null) {
       const oe = match[1].replace(/\s+/g, ' ').trim();
-      const bez = match[2].trim().replace(/\(.*$/, '').trim(); // Klammern am Ende entfernen
+      const bez = match[2].trim().replace(/\(.*$/, '').trim();
       if (oe.length >= 9 && !found.has(oe)) {
         found.set(oe, bez);
       }
     }
   }
   
-  // Fallback: Nur Nummern ohne Bezeichnung
   if (found.size === 0) {
     const patterns = [
       /\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,
@@ -721,6 +692,6 @@ function updateJob(jobId, status, step, message) {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`DECLAY Partslink Navigator v7.4 auf Port ${PORT}`);
-  console.log(`Einfacher Prompt | Teile-Liste | 15 Messages Kontext | Retry 429`);
+  console.log(`DECLAY Partslink Navigator v7.5 auf Port ${PORT}`);
+  console.log(`AGGRESSIVER STOPP | Max 40 Iterationen | Hard Stop 30 | 15 Messages Kontext`);
 });
