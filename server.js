@@ -300,27 +300,32 @@ ${teileText}
 4. Fuer jedes Teil: Lies die OE-Nummern ab.
 5. Wenn du alle Teile hast, melde dich ab (oben rechts Menue → Abmelden).
 
+PARTSLINK24 LAYOUT - IMMER GLEICH:
+- LINKS: Suchergebnis-Liste → hier klickst du auf ein Teil
+- MITTE: Explosionszeichnung → nur anschauen, nicht klicken!
+- RECHTS: Teileverzeichnis mit (i) Buttons → hier klickst du (i) fuer Preise und Zubehoer!
+Dieses Layout ist IMMER gleich egal welches Teil du suchst.
+
 SO SUCHST DU TEILE - SCHRITT FUER SCHRITT:
 1. Klicke ins "Teile suchen" Feld oben rechts
 2. Tippe den Suchbegriff (z.B. "bremsscheibe") → Enter
-3. SOFORT: Klicke links auf das ERSTE passende Suchergebnis (z.B. "5Q0 615 301 H")!
+3. SOFORT: Klicke links auf das ERSTE passende Suchergebnis!
 4. Rechts erscheint die Explosionszeichnung + Teileliste
-5. Klicke rechts auf das (i) Symbol neben dem Hauptteil (z.B. Bremsscheibe)
-6. Es oeffnet sich "Preise / Bestaende aktualisieren" mit:
-   - OE-Nummer + Preis
-   - "Wird oft zusammen gekauft" → dort stehen die passenden Belaege/Zubehoer!
-7. Lies ALLE Nummern + Preise ab (Hauptteil + "Wird oft zusammen gekauft")
+5. Lies die OE-Nummern RECHTS ab (nur SCHWARZE Schrift = passt zum Fahrzeug!)
+6. VERSUCHE auf das (i) Symbol neben dem Hauptteil zu klicken:
+   - Wenn sich "Preise / Bestaende aktualisieren" oeffnet → lies Preis + "Wird oft zusammen gekauft" ab!
+   - Wenn kein (i) vorhanden oder nichts passiert → kein Problem, lies einfach die Nummern aus der Teileliste rechts ab
+7. Wenn du 2-3 OE-Nummern hast: FERTIG mit diesem Teil!
 8. Klicke auf das X um die Suche zu schliessen
 9. Loesche das Suchfeld (Ctrl+A dann Delete) → naechstes Teil suchen
 
 VERBOTEN:
 - NICHT in der linken Suchergebnisliste endlos scrollen! Klicke auf das ERSTE passende Ergebnis!
-- NICHT mehr als 3 Mal scrollen pro Teil! Wenn du Nummern hast, reicht das!
-- NICHT ohne das (i) zu klicken weitersuchen - dort stehen Preise und Zubehoer!
+- NICHT mehr als 3 Mal scrollen pro Teil in der rechten Teileliste!
+- Wenn du 2 OE-Nummern hast → SOFORT weiter zum naechsten Teil!
 
 WICHTIG - OE-NUMMERN ABLESEN:
-- Klicke IMMER auf das (i) Symbol rechts neben dem Teil!
-- Das (i) zeigt: OE-Nummer, Preis, UND passende Belaege/Zubehoer!
+- OE-Nummern stehen RECHTS in der Teileliste neben der Explosionszeichnung
 - NUR Teile mit SCHWARZER Schrift passen zum Fahrzeug! GRAUE ignorieren!
 - Suche Teile OHNE "VA" oder "HA" - nur z.B. "Bremsscheibe" nicht "Bremsscheibe VA"
 
@@ -471,13 +476,15 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
         }
         
         // WEITER ZUM NAECHSTEN TEIL: Wenn wir OE-Nummern haben und Claude noch scrollt
-        const currentJob = jobs.get(jobId);
-        if (currentJob && currentJob.teile.length >= 2 && iteration >= 22) {
+        const currentJob2 = jobs.get(jobId);
+        if (currentJob2 && currentJob2.teile.length >= 2 && iteration >= 20) {
           // Claude hat genug Nummern fuer dieses Teil - zum naechsten!
-          console.log(`[JOB ${jobId}] WEITER: ${currentJob.teile.length} Nummern gefunden, forciere naechstes Teil!`);
+          console.log(`[JOB ${jobId}] WEITER: ${currentJob2.teile.length} Nummern gefunden, forciere naechstes Teil!`);
+          // Alte Messages kuerzen und STOPP ganz ans Ende
+          if (messages.length > 10) messages.splice(2, messages.length - 10);
           messages.push({
             role: 'user',
-            content: `STOPP! Du hast bereits ${currentJob.teile.length} OE-Nummern fuer dieses Teil gefunden. Hoer auf zu scrollen! Klicke auf das X um die Suche zu schliessen, dann klicke ins "Teile suchen" Feld, loesche den Text (Ctrl+A dann Delete), und suche das naechste Teil aus der Liste!`
+            content: `WICHTIG: Du hast bereits ${currentJob2.teile.length} OE-Nummern gefunden! Das reicht fuer dieses Teil! JETZT SOFORT:\n1. Klicke auf das X oben links bei "Suche: Bremsscheibe" um die Suche zu schliessen\n2. Klicke ins "Teile suchen" Feld oben\n3. Druecke Ctrl+A dann Delete um den alten Text zu loeschen\n4. Tippe das NAECHSTE Teil aus der Liste und druecke Enter\n\nDeine Teile-Liste war:\n${teileText}\n\nHoer auf zu scrollen und suche das naechste Teil!`
           });
         }
         
