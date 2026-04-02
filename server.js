@@ -478,14 +478,9 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
         // WEITER ZUM NAECHSTEN TEIL: Wenn wir OE-Nummern haben und Claude noch scrollt
         const currentJob2 = jobs.get(jobId);
         if (currentJob2 && currentJob2.teile.length >= 2 && iteration >= 20) {
-          // Claude hat genug Nummern fuer dieses Teil - zum naechsten!
           console.log(`[JOB ${jobId}] WEITER: ${currentJob2.teile.length} Nummern gefunden, forciere naechstes Teil!`);
-          // Alte Messages kuerzen und STOPP ganz ans Ende
-          if (messages.length > 10) messages.splice(2, messages.length - 10);
-          messages.push({
-            role: 'user',
-            content: `WICHTIG: Du hast bereits ${currentJob2.teile.length} OE-Nummern gefunden! Das reicht fuer dieses Teil! JETZT SOFORT:\n1. Klicke auf das X oben links bei "Suche: Bremsscheibe" um die Suche zu schliessen\n2. Klicke ins "Teile suchen" Feld oben\n3. Druecke Ctrl+A dann Delete um den alten Text zu loeschen\n4. Tippe das NAECHSTE Teil aus der Liste und druecke Enter\n\nDeine Teile-Liste war:\n${teileText}\n\nHoer auf zu scrollen und suche das naechste Teil!`
-          });
+          // Flag setzen - wird in die naechste Tool-Result Message eingebaut
+          currentJob2._forceNextTeil = `WICHTIG: Du hast bereits ${currentJob2.teile.length} OE-Nummern gefunden! Das reicht fuer dieses Teil! JETZT SOFORT:\n1. Klicke auf das X oben links um die Suche zu schliessen\n2. Klicke ins "Teile suchen" Feld oben\n3. Druecke Ctrl+A dann Delete um den alten Text zu loeschen\n4. Tippe das NAECHSTE Teil aus der Liste und druecke Enter\n\nDeine Teile-Liste war:\n${teileText}\n\nHoer auf zu scrollen und suche das naechste Teil!`;
         }
         
         // Ab Iteration 35: Wenn wir gesammelte Nummern haben, Ergebnis liefern
@@ -531,6 +526,13 @@ Erst wenn du alle Teile gesucht hast ODER nicht weiterkommst, gib ERGEBNIS_START
           tool_use_id: toolUse.id,
           content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } }]
         });
+      }
+
+      // STOPP-Text in die Tool-Result Message einbauen (nicht als separate Message!)
+      const forceJob = jobs.get(jobId);
+      if (forceJob && forceJob._forceNextTeil) {
+        toolResults.push({ type: 'text', text: forceJob._forceNextTeil });
+        delete forceJob._forceNextTeil;
       }
 
       messages.push({ role: 'assistant', content: apiResponse.content });
