@@ -25,7 +25,7 @@ let activeJob = false;
 const VIN_MARKEN = {
   'WBA':'BMW','WBS':'BMW','WBY':'BMW','WVW':'Volkswagen','WVG':'Volkswagen',
   'WMW':'MINI','WF0':'Ford','WAU':'Audi','WUA':'Audi',
-  'WDB':'Mercedes','WDC':'Mercedes','WDD':'Mercedes','W0L':'Opel',
+  'WDB':'Mercedes','WDC':'Mercedes','WDD':'Mercedes','W1K':'Mercedes','W1N':'Mercedes','W0L':'Opel',
   'TMB':'Skoda','VF1':'Renault','VF7':'Citroen','VF3':'Peugeot',
   'ZFA':'Fiat','SAL':'Land Rover','SAJ':'Jaguar','YV1':'Volvo',
   'KNA':'Kia','KNE':'Kia','KMH':'Hyundai','JTD':'Toyota','SB1':'Toyota',
@@ -192,14 +192,24 @@ async function processSearchJob(jobId, vin, teileListe) {
     // ============================================================
     const teileText = teileListe.map((t,i) => `${i+1}. ${t}`).join('\n');
 
-    const systemPrompt = '';
+    const systemPrompt = `Du bist KFZ-Mechaniker und bedienst Partslink24.
+Login ist erledigt. VIN: ${vin} (${marke || 'Marke aus VIN'}).
+
+Such mir die passenden Ersatzteile:
+${teileText}
+
+Nutze das Suchfeld "Teile suchen" oben rechts. Pro Teil 1-2 OE-Nummern ablesen, dann weiter zum naechsten.
+Bei VAG (VW/Audi/Skoda/Seat): Nur SCHWARZE Teilenummern passen. Graue oder (1) = andere Variante, ignorieren!
+Klick auf (i) zeigt Preise und "Wird oft zusammen gekauft" — nuetzlich fuer Verbundteile wie Belaege.
+
+Melde jede OE-Nummer so:
+TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`;
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
 
-    const teileNatural = teileListe.join(', ');
     let messages = [{
       role: 'user',
-      content: `Such mir ${teileNatural} fuer den ${marke || 'das Fahrzeug'} mit VIN ${vin} auf Partslink24. Die VIN gibst du oben links bei "Direkteinstieg" ein und drueckst GO. Wenn du eine OE-Nummer findest, melde sie mit: TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`
+      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Gib die VIN ${vin} oben links bei "Direkteinstieg" ein und drueck GO. Dann such diese Teile:\n${teileText}`
     }];
 
     let maxIter = 40, iter = 0, result = null;
@@ -348,9 +358,16 @@ function mapKey(k){const m={'Return':'Enter','return':'Enter','enter':'Enter','s
 function describeAction(a){return{screenshot:'Analysiere...',left_click:'Verarbeite...',type:'Suche Daten...',key:'Verarbeite...',scroll:'Durchsuche Katalog...',wait:'Warte...'}[a.action]||'Verarbeite...';}
 
 function extractOe(text){
-  // Regex entfernt — schneidet Mercedes/Opel/BMW Nummern ab
-  // OE-Nummern kommen nur noch ueber Claudes natuerlichen Text
-  return[];
+  const c=text.replace(/\*\*/g,'').replace(/\*/g,''),f=new Map();
+  // Mercedes: A 281 180 00 10 (Buchstabe + 4 Zifferngruppen)
+  for(const p of[/([A-Z]\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2})\s*[-–:]\s*([^\n,]{3,50})/g]){let m;while((m=p.exec(c))!==null){const o=m[1].replace(/\s+/g,' ').trim();if(o.length>=12&&!f.has(o))f.set(o,m[2].trim());}}
+  // Mercedes ohne Bezeichnung
+  {const p=/\b([A-Z]\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2})\b/g;let m;while((m=p.exec(c))!==null){const o=m[1].replace(/\s+/g,' ').trim();if(o.length>=12&&!f.has(o))f.set(o,'');}}
+  // VAG: 5Q0 615 301 H
+  for(const p of[/(\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{3,50})/g]){let m;while((m=p.exec(c))!==null){const o=m[1].replace(/\s+/g,' ').trim();if(o.length>=9&&!f.has(o))f.set(o,m[2].trim());}}
+  // VAG ohne Bezeichnung
+  {const p=/\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g;const m=c.match(p);if(m)m.forEach(x=>{const o=x.replace(/\s+/g,' ').trim();if(o.length>=9&&!f.has(o))f.set(o,'');});}
+  return[...f].map(([o,b])=>({oe_nummer:o,bezeichnung:b,preis:'',hersteller:'OE'}));
 }
 
 function updateJob(id,status,step,msg){const j=jobs.get(id);if(j){j.status=status;j.step=step;j.message=msg;}console.log(`[JOB ${id}] Step ${step}: ${msg}`);}
