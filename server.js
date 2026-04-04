@@ -192,24 +192,14 @@ async function processSearchJob(jobId, vin, teileListe) {
     // ============================================================
     const teileText = teileListe.map((t,i) => `${i+1}. ${t}`).join('\n');
 
-    const systemPrompt = `Du bist KFZ-Mechaniker und bedienst Partslink24.
-Login ist erledigt. VIN: ${vin} (${marke || 'Marke aus VIN'}).
-
-Such mir die passenden Ersatzteile:
-${teileText}
-
-Nutze das Suchfeld "Teile suchen" oben rechts. Pro Teil 2-3 OE-Nummern ablesen, dann weiter zum naechsten.
-Bei VAG (VW/Audi/Skoda/Seat): Nur SCHWARZE Teilenummern passen. Graue oder (1) = andere Variante, ignorieren!
-Klick auf (i) zeigt Preise und "Wird oft zusammen gekauft" — nuetzlich fuer Verbundteile wie Belaege.
-
-Melde jede OE-Nummer so:
-TEIL_GEFUNDEN: {"oe_nummer": "XXX", "bezeichnung": "YYY"}`;
+    const systemPrompt = '';
 
     updateJob(jobId, 'running', 5, 'Suche Teile...');
 
+    const teileNatural = teileListe.join(', ');
     let messages = [{
       role: 'user',
-      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Gib die VIN ${vin} oben links bei "Direkteinstieg" ein und drueck GO. Dann such diese Teile:\n${teileText}`
+      content: `Such mir ${teileNatural} fuer den ${marke || 'das Fahrzeug'} mit VIN ${vin} auf Partslink24. Die VIN gibst du oben links bei "Direkteinstieg" ein und drueckst GO.`
     }];
 
     let maxIter = 40, iter = 0, result = null;
@@ -323,11 +313,13 @@ TEIL_GEFUNDEN: {"oe_nummer": "XXX", "bezeichnung": "YYY"}`;
 // CLAUDE API
 // ============================================================
 async function callClaude(sys, msgs) {
+  const body = {model:'claude-sonnet-4-6',max_tokens:4096,
+    tools:[{type:'computer_20251124',name:'computer',display_width_px:DISPLAY_WIDTH,display_height_px:DISPLAY_HEIGHT,display_number:1}],messages:msgs};
+  if (sys) body.system = sys;
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','anthropic-beta':'computer-use-2025-11-24'},
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:4096,system:sys,
-      tools:[{type:'computer_20251124',name:'computer',display_width_px:DISPLAY_WIDTH,display_height_px:DISPLAY_HEIGHT,display_number:1}],messages:msgs})
+    body:JSON.stringify(body)
   });
   if(!r.ok) throw new Error(`API ${r.status}`);
   return await r.json();
