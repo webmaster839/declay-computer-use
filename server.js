@@ -90,7 +90,7 @@ app.get('/view/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job || !job.lastScreenshot) return res.status(404).send('Kein Screenshot');
   const img = Buffer.from(job.lastScreenshot, 'base64');
-  res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': img.length, 'Cache-Control': 'no-cache' });
+  res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': img.length, 'Cache-Control': 'no-cache' });
   res.end(img);
 });
 
@@ -179,7 +179,7 @@ async function processSearchJob(jobId, vin, teileListe) {
       await page.waitForTimeout(5000);
       try{const ob=await page.$('.modal button,.dialog button');if(ob){await ob.click();await page.waitForTimeout(2000);}}catch(e){}
 
-      const ss = await page.screenshot({encoding:'base64',type:'png'});
+      const ss = await page.screenshot({encoding:'base64',type:'jpeg',quality:70});
       const j1 = jobs.get(jobId); if(j1) j1.lastScreenshot = ss;
       console.log(`[JOB ${jobId}] Login OK`);
       updateJob(jobId, 'running', 4, 'Eingeloggt!');
@@ -284,9 +284,9 @@ TEIL_GEFUNDEN: {"oe_nummer": "XXX", "bezeichnung": "YYY"}`;
         console.log(`[JOB ${jobId}] ${a.action}`,a.coordinate||lt);
         updateJob(jobId,'running',3+iter,describeAction(a));
         await executeAction(page,a);
-        const ss=await page.screenshot({encoding:'base64',type:'png'});
+        const ss=await page.screenshot({encoding:'base64',type:'jpeg',quality:70});
         const cj=jobs.get(jobId); if(cj) cj.lastScreenshot=ss;
-        tr.push({type:'tool_result',tool_use_id:tool.id,content:[{type:'image',source:{type:'base64',media_type:'image/png',data:ss}}]});
+        tr.push({type:'tool_result',tool_use_id:tool.id,content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:ss}}]});
       }
 
       const fj=jobs.get(jobId);
