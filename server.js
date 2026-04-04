@@ -119,9 +119,9 @@ app.get('/live', (req, res) => {
 
 function getLiveHtml(jobId) {
   return `<!DOCTYPE html><html><head><title>DECLAY Live</title>
-<style>body{background:#080a08;color:#39ff14;font-family:monospace;margin:0;padding:16px}h1{font-size:18px;letter-spacing:2px}#s{padding:8px 16px;background:#0f1f0f;border:1px solid #39ff14;border-radius:8px;margin:8px 0;font-size:14px}#i{max-width:100%;border:1px solid #39ff14;border-radius:4px;margin-top:8px}.done{color:#22c55e}.error{color:#ef4444}</style></head><body>
-<h1>DECLAY LIVE VIEW</h1><div id="s">Verbinde...</div><img id="i" src="/view/${jobId}" onerror="this.style.display='none'"/>
-<script>const s=document.getElementById('s'),i=document.getElementById('i');async function r(){try{const j=await(await fetch('/status/${jobId}')).json();s.textContent='Schritt '+j.step+': '+j.message;s.className=j.status==='done'?'done':j.status==='error'?'error':'';i.src='/view/${jobId}?t='+Date.now();i.style.display='block';if(j.status==='done'||j.status==='error'){if(j.teile&&j.teile.length)s.textContent+=' | '+j.teile.length+' Teile!';return}setTimeout(r,3000)}catch(e){s.textContent='Warte...';setTimeout(r,5000)}}r();</script></body></html>`;
+<style>body{background:#080a08;color:#39ff14;font-family:monospace;margin:0;padding:16px}h1{font-size:18px;letter-spacing:2px}#s{padding:8px 16px;background:#0f1f0f;border:1px solid #39ff14;border-radius:8px;margin:8px 0;font-size:14px}#t{padding:4px 16px;color:#888;font-size:12px}#i{max-width:100%;border:1px solid #39ff14;border-radius:4px;margin-top:8px}.done{color:#22c55e}.error{color:#ef4444}</style></head><body>
+<h1>DECLAY LIVE VIEW</h1><div id="t">⏱️ --:--</div><div id="s">Verbinde...</div><img id="i" src="/view/${jobId}" onerror="this.style.display='none'"/>
+<script>const s=document.getElementById('s'),i=document.getElementById('i'),t=document.getElementById('t');let st=null;function u(){if(!st)return;const d=Math.floor((Date.now()-st)/1000),m=Math.floor(d/60),sec=d%60;t.textContent='⏱️ '+m+':'+(sec<10?'0':'')+sec}setInterval(u,1000);async function r(){try{const j=await(await fetch('/status/${jobId}')).json();if(!st&&j.startedAt)st=new Date(j.startedAt).getTime();u();s.textContent='Schritt '+j.step+': '+j.message;s.className=j.status==='done'?'done':j.status==='error'?'error':'';i.src='/view/${jobId}?t='+Date.now();i.style.display='block';if(j.status==='done'||j.status==='error'){if(j.teile&&j.teile.length)s.textContent+=' | '+j.teile.length+' Teile!';return}setTimeout(r,3000)}catch(e){s.textContent='Warte...';setTimeout(r,5000)}}r();</script></body></html>`;
 }
 
 // ============================================================
@@ -199,7 +199,7 @@ async function processSearchJob(jobId, vin, teileListe) {
     const teileNatural = teileListe.join(', ');
     let messages = [{
       role: 'user',
-      content: `Such mir ${teileNatural} fuer den ${marke || 'das Fahrzeug'} mit VIN ${vin} auf Partslink24. Die VIN gibst du oben links bei "Direkteinstieg" ein und drueckst GO.`
+      content: `Such mir ${teileNatural} fuer den ${marke || 'das Fahrzeug'} mit VIN ${vin} auf Partslink24. Die VIN gibst du oben links bei "Direkteinstieg" ein und drueckst GO. Wenn du eine OE-Nummer findest, melde sie mit: TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`
     }];
 
     let maxIter = 40, iter = 0, result = null;
@@ -348,10 +348,9 @@ function mapKey(k){const m={'Return':'Enter','return':'Enter','enter':'Enter','s
 function describeAction(a){return{screenshot:'Analysiere...',left_click:'Verarbeite...',type:'Suche Daten...',key:'Verarbeite...',scroll:'Durchsuche Katalog...',wait:'Warte...'}[a.action]||'Verarbeite...';}
 
 function extractOe(text){
-  const c=text.replace(/\*\*/g,'').replace(/\*/g,''),f=new Map();
-  for(const p of[/(\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g,/([A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2})\s*[-–:]\s*([^\n,]{5,50})/g]){let m;while((m=p.exec(c))!==null){const o=m[1].replace(/\s+/g,' ').trim();if(o.length>=9&&!f.has(o))f.set(o,m[2].trim().replace(/\(.*$/,'').trim());}}
-  if(f.size===0){for(const p of[/\b\d{1,2}[A-Z]\d{1,2}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g,/\b[A-Z]{1,3}\s?\d{3}\s?\d{3}\s?[A-Z]{0,2}\b/g]){const m=c.match(p);if(m)m.forEach(x=>{const o=x.replace(/\s+/g,' ').trim();if(o.length>=9)f.set(o,'');});}}
-  return[...f].map(([o,b])=>({oe_nummer:o,bezeichnung:b,preis:'',hersteller:'OE'}));
+  // Regex entfernt — schneidet Mercedes/Opel/BMW Nummern ab
+  // OE-Nummern kommen nur noch ueber Claudes natuerlichen Text
+  return[];
 }
 
 function updateJob(id,status,step,msg){const j=jobs.get(id);if(j){j.status=status;j.step=step;j.message=msg;}console.log(`[JOB ${id}] Step ${step}: ${msg}`);}
