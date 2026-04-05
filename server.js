@@ -152,92 +152,33 @@ async function processSearchJob(jobId, vin, teileListe) {
     const pass = process.env.PARTSLINK_PASS || '';
 
     // ============================================================
-    // PUPPETEER: Login (3 Sekunden, kein Claude noetig)
+    // PUPPETEER: Login — sauber, kein blindes Klicken
     // ============================================================
     updateJob(jobId, 'running', 3, 'Login...');
     try {
       await page.waitForTimeout(2000);
+      // Cookie-Banner per Element suchen (NICHT per Koordinaten!)
       try { const cb = await page.$('button[id*="cookie"],.cc-btn,#onetrust-accept-btn-handler'); if(cb){await cb.click();await page.waitForTimeout(1000);} } catch(e){}
-      try { await page.mouse.click(1119, 747); await page.waitForTimeout(1000); } catch(e){}
 
+      // Login-Formular ausfuellen
       const inputs = await page.$$('input[type="text"],input[type="password"],input:not([type])');
       if (inputs.length >= 3) {
         await inputs[0].click(); await inputs[0].type(firma,{delay:30}); await page.waitForTimeout(300);
         await inputs[1].click(); await inputs[1].type(user,{delay:30}); await page.waitForTimeout(300);
         const pi = await page.$('input[type="password"]') || inputs[2];
         await pi.click(); await pi.type(pass,{delay:30}); await page.waitForTimeout(300);
+        const lb = await page.$('button[type="submit"],input[type="submit"],.login-button');
+        if(lb){await lb.click();}
+        await page.waitForTimeout(5000);
+        try{const ob=await page.$('.modal button,.dialog button');if(ob){await ob.click();await page.waitForTimeout(2000);}}catch(e){}
+        console.log(`[JOB ${jobId}] Login OK`);
       } else {
-        await page.mouse.click(988,281); await page.waitForTimeout(500);
-        await page.keyboard.type(firma,{delay:30}); await page.waitForTimeout(300);
-        await page.mouse.click(988,345); await page.waitForTimeout(500);
-        await page.keyboard.type(user,{delay:30}); await page.waitForTimeout(300);
-        await page.mouse.click(988,406); await page.waitForTimeout(500);
-        await page.keyboard.type(pass,{delay:30}); await page.waitForTimeout(300);
+        console.log(`[JOB ${jobId}] Kein Login-Formular — Claude uebernimmt`);
       }
-      const lb = await page.$('button[type="submit"],input[type="submit"],.login-button');
-      if(lb){await lb.click();}else{await page.mouse.click(988,485);}
-      await page.waitForTimeout(5000);
-      try{const ob=await page.$('.modal button,.dialog button');if(ob){await ob.click();await page.waitForTimeout(2000);}}catch(e){}
 
       const ss = await page.screenshot({encoding:'base64',type:'jpeg',quality:70});
       const j1 = jobs.get(jobId); if(j1) j1.lastScreenshot = ss;
-      console.log(`[JOB ${jobId}] Login OK`);
       updateJob(jobId, 'running', 4, 'Eingeloggt!');
-
-      // ============================================================
-      // PUPPETEER: Marken-Logo klicken (spart 5+ Iterationen!)
-      // ============================================================
-      if (marke) {
-        console.log(`[JOB ${jobId}] Klicke ${marke} Logo...`);
-        updateJob(jobId, 'running', 4, `Suche ${marke}...`);
-        try {
-          // Logo per Alt-Text oder Title finden
-          const logoSelector = `img[alt*="${marke}" i], img[title*="${marke}" i], a[title*="${marke}" i]`;
-          const logo = await page.$(logoSelector);
-          if (logo) {
-            await logo.click();
-            await page.waitForTimeout(3000);
-            console.log(`[JOB ${jobId}] ${marke} Logo geklickt!`);
-          } else {
-            // Fallback: nach Markenname im Text suchen
-            const markeLink = await page.$(`a:has-text("${marke}"), span:has-text("${marke}")`);
-            if (markeLink) {
-              await markeLink.click();
-              await page.waitForTimeout(3000);
-              console.log(`[JOB ${jobId}] ${marke} Link geklickt!`);
-            } else {
-              console.log(`[JOB ${jobId}] ${marke} Logo nicht gefunden — Claude uebernimmt`);
-            }
-          }
-
-          // VIN im Direkteinstieg eingeben (innerhalb des Marken-Katalogs)
-          try {
-            const direktFeld = await page.$('input[placeholder*="Direkteinstieg"], input[placeholder*="irect"]');
-            if (direktFeld) {
-              await direktFeld.click();
-              await direktFeld.type(vin, {delay:30});
-              await page.keyboard.press('Enter');
-              await page.waitForTimeout(5000);
-              console.log(`[JOB ${jobId}] VIN ${vin} eingegeben!`);
-              updateJob(jobId, 'running', 4, `Fahrzeug geladen!`);
-            }
-          } catch(e) {
-            console.log(`[JOB ${jobId}] VIN-Eingabe: Claude uebernimmt`);
-          }
-
-          // Pop-up schliessen falls vorhanden
-          try {
-            const popup = await page.$('.modal button, .dialog button, button.close');
-            if (popup) { await popup.click(); await page.waitForTimeout(1000); }
-          } catch(e) {}
-
-          // Neuer Screenshot nach Logo + VIN
-          const ss2 = await page.screenshot({encoding:'base64',type:'jpeg',quality:70});
-          const j2 = jobs.get(jobId); if(j2) j2.lastScreenshot = ss2;
-        } catch(e) {
-          console.log(`[JOB ${jobId}] Logo/VIN Fehler: ${e.message} — Claude uebernimmt`);
-        }
-      }
     } catch(e) {
       console.log(`[JOB ${jobId}] Login Fehler: ${e.message}`);
     }
@@ -248,18 +189,14 @@ async function processSearchJob(jobId, vin, teileListe) {
     const teileText = teileListe.map((t,i) => `${i+1}. ${t}`).join('\n');
 
     const systemPrompt = `Du bist KFZ-Mechaniker und bedienst Partslink24.
-Login ist erledigt. Marke: ${marke || 'unbekannt'}. VIN: ${vin}.
-
-Das Marken-Logo wurde bereits geklickt und die VIN wurde moeglicherweise schon eingegeben.
-Pruefe den Screenshot: Wenn das Fahrzeug schon geladen ist, such direkt die Teile.
-Falls nicht, klicke auf das ${marke || ''} Logo und gib die VIN ${vin} im Feld "Direkteinstieg" ein.
+Login ist erledigt. VIN: ${vin} (${marke || 'Marke aus VIN'}).
 
 Such mir die passenden Ersatzteile:
 ${teileText}
 
+Klick zuerst auf das ${marke || 'Marken'}-Logo, dann gib die VIN ${vin} im Feld "Direkteinstieg" oben links ein.
 Nutze das Suchfeld "Teile suchen" oben rechts. Pro Teil 1-2 OE-Nummern ablesen, dann weiter zum naechsten.
 Bei VAG (VW/Audi/Skoda/Seat): Nur SCHWARZE Teilenummern passen. Graue oder (1) = andere Variante, ignorieren!
-Klick auf (i) zeigt Preise und "Wird oft zusammen gekauft" — nuetzlich fuer Verbundteile wie Belaege.
 
 Melde jede OE-Nummer so:
 TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`;
@@ -268,7 +205,7 @@ TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`;
 
     let messages = [{
       role: 'user',
-      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Das ${marke || ''} Logo wurde bereits geklickt. Pruefe ob das Fahrzeug mit VIN ${vin} schon geladen ist. Falls ja, such direkt die Teile. Falls nicht, gib die VIN im "Direkteinstieg" Feld ein. Dann such diese Teile:\n${teileText}`
+      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Klick auf das ${marke || 'Marken'}-Logo und gib die VIN ${vin} im "Direkteinstieg" Feld ein. Dann such diese Teile:\n${teileText}`
     }];
 
     let maxIter = 50, iter = 0, result = null;
