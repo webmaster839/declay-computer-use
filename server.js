@@ -195,7 +195,7 @@ Such mir die passenden Ersatzteile:
 ${teileText}
 
 Klick zuerst auf das ${marke || 'Marken'}-Logo, dann gib die VIN ${vin} im Feld "Direkteinstieg" oben links ein.
-Nutze das Suchfeld "Teile suchen" oben rechts. Pro Teil 1-2 OE-Nummern ablesen, dann weiter zum naechsten.
+Nutze das Suchfeld "Teile suchen" oben rechts.
 Bei VAG (VW/Audi/Skoda/Seat): Nur SCHWARZE Teilenummern passen. Graue oder (1) = andere Variante, ignorieren!
 
 Melde jede OE-Nummer so:
