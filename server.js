@@ -12,7 +12,7 @@ app.use(express.json());
 // MINIMALER PROMPT — wie Chrome Extension!
 // Puppeteer: Login + VIN (3 Sekunden)
 // Claude: "Such die Teile" — fertig!
-// STOPP ab Iteration 8 | Hard Stop 30 | Max 40
+// STOPP ab Iteration 6 | Hard Stop 45 | Max 50
 // ============================================================
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -183,6 +183,61 @@ async function processSearchJob(jobId, vin, teileListe) {
       const j1 = jobs.get(jobId); if(j1) j1.lastScreenshot = ss;
       console.log(`[JOB ${jobId}] Login OK`);
       updateJob(jobId, 'running', 4, 'Eingeloggt!');
+
+      // ============================================================
+      // PUPPETEER: Marken-Logo klicken (spart 5+ Iterationen!)
+      // ============================================================
+      if (marke) {
+        console.log(`[JOB ${jobId}] Klicke ${marke} Logo...`);
+        updateJob(jobId, 'running', 4, `Suche ${marke}...`);
+        try {
+          // Logo per Alt-Text oder Title finden
+          const logoSelector = `img[alt*="${marke}" i], img[title*="${marke}" i], a[title*="${marke}" i]`;
+          const logo = await page.$(logoSelector);
+          if (logo) {
+            await logo.click();
+            await page.waitForTimeout(3000);
+            console.log(`[JOB ${jobId}] ${marke} Logo geklickt!`);
+          } else {
+            // Fallback: nach Markenname im Text suchen
+            const markeLink = await page.$(`a:has-text("${marke}"), span:has-text("${marke}")`);
+            if (markeLink) {
+              await markeLink.click();
+              await page.waitForTimeout(3000);
+              console.log(`[JOB ${jobId}] ${marke} Link geklickt!`);
+            } else {
+              console.log(`[JOB ${jobId}] ${marke} Logo nicht gefunden — Claude uebernimmt`);
+            }
+          }
+
+          // VIN im Direkteinstieg eingeben (innerhalb des Marken-Katalogs)
+          try {
+            const direktFeld = await page.$('input[placeholder*="Direkteinstieg"], input[placeholder*="irect"]');
+            if (direktFeld) {
+              await direktFeld.click();
+              await direktFeld.type(vin, {delay:30});
+              await page.keyboard.press('Enter');
+              await page.waitForTimeout(5000);
+              console.log(`[JOB ${jobId}] VIN ${vin} eingegeben!`);
+              updateJob(jobId, 'running', 4, `Fahrzeug geladen!`);
+            }
+          } catch(e) {
+            console.log(`[JOB ${jobId}] VIN-Eingabe: Claude uebernimmt`);
+          }
+
+          // Pop-up schliessen falls vorhanden
+          try {
+            const popup = await page.$('.modal button, .dialog button, button.close');
+            if (popup) { await popup.click(); await page.waitForTimeout(1000); }
+          } catch(e) {}
+
+          // Neuer Screenshot nach Logo + VIN
+          const ss2 = await page.screenshot({encoding:'base64',type:'jpeg',quality:70});
+          const j2 = jobs.get(jobId); if(j2) j2.lastScreenshot = ss2;
+        } catch(e) {
+          console.log(`[JOB ${jobId}] Logo/VIN Fehler: ${e.message} — Claude uebernimmt`);
+        }
+      }
     } catch(e) {
       console.log(`[JOB ${jobId}] Login Fehler: ${e.message}`);
     }
@@ -193,7 +248,11 @@ async function processSearchJob(jobId, vin, teileListe) {
     const teileText = teileListe.map((t,i) => `${i+1}. ${t}`).join('\n');
 
     const systemPrompt = `Du bist KFZ-Mechaniker und bedienst Partslink24.
-Login ist erledigt. VIN: ${vin} (${marke || 'Marke aus VIN'}).
+Login ist erledigt. Marke: ${marke || 'unbekannt'}. VIN: ${vin}.
+
+Das Marken-Logo wurde bereits geklickt und die VIN wurde moeglicherweise schon eingegeben.
+Pruefe den Screenshot: Wenn das Fahrzeug schon geladen ist, such direkt die Teile.
+Falls nicht, klicke auf das ${marke || ''} Logo und gib die VIN ${vin} im Feld "Direkteinstieg" ein.
 
 Such mir die passenden Ersatzteile:
 ${teileText}
@@ -209,10 +268,10 @@ TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`;
 
     let messages = [{
       role: 'user',
-      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Gib die VIN ${vin} oben links bei "Direkteinstieg" ein und drueck GO. Dann such diese Teile:\n${teileText}`
+      content: `Mache einen Screenshot. Du bist auf partslink24.com eingeloggt. Das ${marke || ''} Logo wurde bereits geklickt. Pruefe ob das Fahrzeug mit VIN ${vin} schon geladen ist. Falls ja, such direkt die Teile. Falls nicht, gib die VIN im "Direkteinstieg" Feld ein. Dann such diese Teile:\n${teileText}`
     }];
 
-    let maxIter = 40, iter = 0, result = null;
+    let maxIter = 50, iter = 0, result = null;
 
     while (iter < maxIter) {
       iter++;
@@ -221,7 +280,7 @@ TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`;
 
       updateJob(jobId,'running',3+iter,'Analysiere...');
       console.log(`[JOB ${jobId}] Iter ${iter}`);
-      if (iter > 1) { updateJob(jobId,'running',3+iter,'Identifiziere OE-Nummern...'); await new Promise(r=>setTimeout(r,10000)); }
+      if (iter > 1) { updateJob(jobId,'running',3+iter,'Identifiziere OE-Nummern...'); await new Promise(r=>setTimeout(r,5000)); }
       if (messages.length > 15) { messages = [messages[0],...messages.slice(-14)]; }
 
       let api = null;
@@ -263,15 +322,15 @@ TEIL_GEFUNDEN: {"oe_nummer": "KOMPLETTE NUMMER", "bezeichnung": "Teilname"}`;
         const found = extractOe(tb.text);
         if(found.length>0){const cj=jobs.get(jobId);if(cj){for(const t of found){if(!cj.teile.some(x=>x.oe_nummer===t.oe_nummer)){cj.teile.push(t);console.log(`[JOB ${jobId}] AUTO: ${t.oe_nummer}`);}}}}
 
-        // STOPP ab Iteration 8 + 2 OE
+        // STOPP ab Iteration 6 + 1 OE pro Teil — schneller weiter!
         const cj2=jobs.get(jobId);
-        if(cj2&&cj2.teile.length>=2&&iter>=8){
+        if(cj2&&cj2.teile.length>=1&&iter>=6){
           console.log(`[JOB ${jobId}] STOPP: ${cj2.teile.length} OE bei Iter ${iter}`);
-          cj2._forceNext=`Du hast ${cj2.teile.length} OE-Nummern. Reicht! Schliess die Suche (X), leere das Suchfeld, such das naechste Teil:\n${teileText}`;
+          cj2._forceNext=`Du hast ${cj2.teile.length} OE-Nummern gefunden. Gut! Schliess die aktuelle Suche (X), leere das Suchfeld, such das naechste Teil.`;
         }
 
-        // Hard Stop 30
-        if(!result&&iter>=30){const cj=jobs.get(jobId);if(cj&&cj.teile.length>0){console.log(`[JOB ${jobId}] HARD STOP`);result={teile:cj.teile};}}
+        // Hard Stop 45
+        if(!result&&iter>=45){const cj=jobs.get(jobId);if(cj&&cj.teile.length>0){console.log(`[JOB ${jobId}] HARD STOP`);result={teile:cj.teile};}}
       }
       if(result) break;
 
@@ -373,4 +432,4 @@ function extractOe(text){
 function updateJob(id,status,step,msg){const j=jobs.get(id);if(j){j.status=status;j.step=step;j.message=msg;}console.log(`[JOB ${id}] Step ${step}: ${msg}`);}
 
 const PORT=process.env.PORT||3001;
-app.listen(PORT,()=>{console.log(`DECLAY v7.5 Port ${PORT}`);console.log(`MINI-PROMPT | STOPP Iter 8 | Hard 30 | Max 40`);});
+app.listen(PORT,()=>{console.log(`DECLAY v7.5 Port ${PORT}`);console.log(`MINI-PROMPT | STOPP Iter 6 | Hard 45 | Max 50 | Wait 5s`);});
